@@ -1,0 +1,147 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { AppButton, AppCheckBox, AppTextField, SettingsRow } from "controls.slint";
+import { AutomationRow } from "library.slint";
+import { WorkflowReferences } from "references.slint";
+
+export component VtubeSettingsView inherits Rectangle {
+    in-out property <string> host;
+    in-out property <string> port;
+    in-out property <bool> enabled;
+    in property <string> health;
+    in property <string> status;
+    in property <bool> pending;
+    in property <[AutomationRow]> workflows;
+    callback open-workflow(string);
+    callback save-settings;
+    callback authorize;
+    callback forget-authorization;
+
+    background: Theme.ink;
+
+    ScrollView {
+        VerticalLayout {
+            padding: Theme.space-6;
+            spacing: 0px;
+            alignment: start;
+
+            HorizontalLayout {
+                height: 48px;
+                max-width: 920px;
+                spacing: Theme.space-4;
+
+                Text {
+                    text: root.health == "" ? "Checking…" : root.health;
+                    color: Theme.gold;
+                    font-family: Theme.font-family;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                    horizontal-stretch: 1;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    AppCheckBox {
+                        text: "Enable VTube Studio";
+                        checked <=> root.enabled;
+                        enabled: !root.pending;
+                    }
+                }
+            }
+
+            Rectangle { height: 48px; }
+
+            VerticalLayout {
+                spacing: 0px;
+                max-width: 920px;
+
+                SettingsRow {
+                    label: "Server";
+                    AppTextField {
+                        text <=> root.host;
+                        label: "VTube Studio server";
+                        enabled: !root.pending;
+                    }
+                }
+
+                SettingsRow {
+                    label: "Port";
+                    AppTextField {
+                        text <=> root.port;
+                        label: "VTube Studio port";
+                        enabled: !root.pending;
+                    }
+                }
+
+                SettingsRow {
+                    label: "Authorization";
+                    separator: false;
+                    HorizontalLayout {
+                        spacing: Theme.space-2;
+                        AppButton {
+                            text: "Authorize";
+                            width: 120px;
+                            primary: true;
+                            enabled: !root.pending;
+                            clicked => { root.authorize(); }
+                        }
+                        AppButton {
+                            text: "Forget authorization";
+                            width: 180px;
+                            enabled: !root.pending;
+                            clicked => { root.forget-authorization(); }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+            }
+
+            Rectangle { height: Theme.space-4; }
+
+            HorizontalLayout {
+                max-width: 920px;
+                spacing: Theme.space-4;
+
+                Text {
+                    text: "Changes apply when you save. VTube Studio must run on this computer.";
+                    color: Theme.muted;
+                    font-family: Theme.font-family;
+                    wrap: word-wrap;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+
+                AppButton {
+                    text: "Save connection";
+                    primary: true;
+                    width: 152px;
+                    enabled: !root.pending;
+                    clicked => { root.save-settings(); }
+                }
+            }
+
+            if root.status != "": Text {
+                text: root.status;
+                color: Theme.muted;
+                font-family: Theme.font-family;
+                wrap: word-wrap;
+                max-width: 920px;
+            }
+
+            Rectangle { height: Theme.space-4; }
+
+            Text {
+                text: "Save the connection, then authorize SnenkBot and approve the request in VTube Studio.";
+                color: Theme.muted;
+                font-family: Theme.font-family;
+                wrap: word-wrap;
+                max-width: 920px;
+            }
+
+            Rectangle { height: 40px; }
+            WorkflowReferences { max-width: 920px; workflows: root.workflows; open(id) => { root.open-workflow(id); } }
+            Rectangle { vertical-stretch: 1; }
+        }
+    }
+}

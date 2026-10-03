@@ -1,0 +1,20 @@
+import { Theme } from "theme.slint";
+import { AppButton } from "controls.slint";
+
+export component AccountCard inherits Rectangle {
+    in property <string> title;
+    in property <string> account;
+    in property <string> description;
+    in property <string> connect-label;
+    in property <bool> enabled: true;
+    callback connect;
+    height: 211px;
+    background: Theme.side;
+    border-radius: 8px;
+    Image { x: 20px; y: 24px; width: 18px; height: 18px; source: @image-url("../assets/icons/message-circle.svg"); colorize: Theme.gold; }
+    Text { x: 54px; y: 20px; width: parent.width - 74px; height: 22px; text: root.title; color: Theme.text; font-size: 17px; font-weight: 600; }
+    Text { x: 20px; y: 64px; width: parent.width - 208px; height: 26px; text: root.account == "" ? "Not connected" : root.account; color: Theme.text; font-size: 20px; overflow: elide; }
+    Text { x: 20px; y: 104px; width: parent.width - 40px; height: 18px; text: root.account == "" ? "Sign in to connect" : "Signed in"; color: root.account == "" ? Theme.gold : Theme.muted; font-size: 13px; }
+    Text { x: 20px; y: 144px; width: parent.width - 40px; text: root.description; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+    AppButton { x: parent.width - 180px; y: 61px; width: 156px; text: root.account == "" ? "Connect" : "Reconnect"; accessible-label: root.connect-label; primary: root.account == ""; enabled: root.enabled; clicked => { root.connect(); } }
+}

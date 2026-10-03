@@ -1,0 +1,53 @@
+{
+  "workflow": {
+    "id": "undertale",
+    "revision": 1,
+    "overlap": true,
+    "steps": [
+      {
+        "id": "message",
+        "on_failure": "Stop",
+        "kind": {
+          "Action": {
+            "capability": "twitch.send_chat",
+            "version": 1,
+            "inputs": {
+              "message": {
+                "Text": [
+                  {
+                    "Literal": "No spoilers or backseating, please."
+                  }
+                ]
+              },
+              "broadcaster_fallback": {
+                "Literal": true
+              }
+            },
+            "deadline_ms": null
+          }
+        }
+      }
+    ],
+    "outputs": {}
+  },
+  "name": "Undertale",
+  "triggers": [
+    {
+      "id": "source-trigger",
+      "enabled": true,
+      "kind": {
+        "kind": "integration_event",
+        "integration": "twitch",
+        "event": "chat.command",
+        "filters": {
+          "command": "!blind",
+          "aliases": [
+            "!first",
+            "!backseating"
+          ],
+          "broadcaster_or_moderator": false
+        }
+      }
+    }
+  ]
+}

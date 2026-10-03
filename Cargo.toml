@@ -1,0 +1,73 @@
+[package]
+name = "SnenkBot"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+members = ["crates/snenkbot_macros", "crates/snenkbot_desktop"]
+
+[lib]
+name = "snenk_bot"
+
+[features]
+default = ["slint-ui"]
+slint-ui = ["dep:slint", "dep:slint-build"]
+desktop-contracts = ["dep:specta", "dep:specta-typescript"]
+
+[[bin]]
+name = "SnenkBot"
+path = "src/main.rs"
+required-features = ["slint-ui"]
+
+[[example]]
+name = "render_ui"
+required-features = ["slint-ui"]
+
+[[test]]
+name = "editor"
+required-features = ["slint-ui"]
+
+[[test]]
+name = "input_form"
+required-features = ["slint-ui"]
+
+[[test]]
+name = "ui"
+required-features = ["slint-ui"]
+
+[dependencies]
+specta = { version = "=2.0.0-rc.25", optional = true, features = ["derive"] }
+specta-typescript = { version = "=0.0.12", optional = true }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.17"
+snenkbot_macros = { path = "crates/snenkbot_macros" }
+dirs = "6.0"
+tempfile = "3.27"
+slint = { version = "=1.18.1", optional = true, default-features = false, features = ["std", "backend-winit", "renderer-software", "accessibility", "compat-1-2"] }
+tokio = { version = "1.53", features = ["rt-multi-thread", "time", "sync", "macros", "net"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+keyring = { version = "=3.6.3", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+uuid = { version = "1", features = ["v4"] }
+obws = { version = "0.15.0", features = ["events", "tls"] }
+futures-util = "0.3.34"
+tokio-websockets = { version = "0.13.3", features = ["client", "sha1_smol", "ring", "rustls-webpki-roots"] }
+sha2 = "0.10"
+base64 = "0.22"
+arboard = "3.6.1"
+webbrowser = "1.2.4"
+mlua = { version = "0.12.1", default-features = false, features = ["lua54", "vendored", "async", "serialize", "send"] }
+full_moon = { version = "2.2.0", default-features = false, features = ["lua54"] }
+vtubestudio = "0.9.0"
+
+[build-dependencies]
+slint-build = { version = "=1.18.1", optional = true }
+
+[dev-dependencies]
+i-slint-backend-testing = "=1.18.1"
+png = "0.18"
+tokio = { version = "1.53", features = ["test-util"] }
+tokio-websockets = { version = "0.13.3", features = ["server"] }

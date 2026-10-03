@@ -1,0 +1,38 @@
+[package]
+name = "snenkbot_desktop"
+version = "0.1.0"
+edition = "2024"
+default-run = "SnenkBot-desktop"
+
+[features]
+native = ["tauri/wry", "tauri/custom-protocol", "dep:tauri-build"]
+
+[[bin]]
+name = "SnenkBot-desktop"
+path = "src/main.rs"
+required-features = ["native"]
+
+[build-dependencies]
+tauri-build = { version = "2", optional = true , features = [] }
+
+[dependencies]
+snenk_bot = { package = "SnenkBot", path = "../..", default-features = false, features = ["desktop-contracts"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+specta = { version = "=2.0.0-rc.25", features = ["derive"] }
+specta-serde = "=0.0.12"
+specta-typescript = "=0.0.12"
+tauri = { version = "=2.12.1", default-features = false , features = [] }
+tokio = { version = "1.53", features = ["sync", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+webbrowser = "1.2.4"
+arboard = "3.6.1"
+tempfile = "3.27"
+thiserror = "2.0.17"
+
+[dev-dependencies]
+tempfile = "3.27"
+tokio = { version = "1.53", features = ["macros", "rt", "test-util"] }

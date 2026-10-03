@@ -1,0 +1,209 @@
+{
+  "workflow": {
+    "id": "recording-details",
+    "revision": 1,
+    "overlap": true,
+    "steps": [
+      {
+        "id": "recording-status",
+        "on_failure": "Stop",
+        "kind": {
+          "Action": {
+            "capability": "obs.get_recording_status",
+            "version": 1,
+            "inputs": {},
+            "deadline_ms": null
+          }
+        }
+      },
+      {
+        "id": "recording-only",
+        "on_failure": "Stop",
+        "kind": {
+          "If": {
+            "condition": {
+              "Equal": [
+                {
+                  "Reference": {
+                    "step_id": "recording-status",
+                    "output_id": "active",
+                    "fallback": null
+                  }
+                },
+                {
+                  "Literal": true
+                }
+              ]
+            },
+            "then_steps": [
+              {
+                "id": "recording-settle-choice",
+                "on_failure": "Stop",
+                "kind": {
+                  "If": {
+                    "condition": {
+                      "NotEqual": [
+                        {
+                          "Trigger": {
+                            "name": "event",
+                            "fallback": {
+                              "Literal": ""
+                            }
+                          }
+                        },
+                        {
+                          "Literal": "channel.details_changed"
+                        }
+                      ]
+                    },
+                    "then_steps": [
+                      {
+                        "id": "recording-settle",
+                        "on_failure": "Stop",
+                        "kind": {
+                          "Delay": {
+                            "millis": 2000
+                          }
+                        }
+                      }
+                    ],
+                    "else_steps": []
+                  }
+                }
+              },
+              {
+                "id": "channel",
+                "on_failure": "Stop",
+                "kind": {
+                  "Action": {
+                    "capability": "twitch.get_channel",
+                    "version": 1,
+                    "inputs": {},
+                    "deadline_ms": null
+                  }
+                }
+              },
+              {
+                "id": "clean-title",
+                "on_failure": "Stop",
+                "kind": {
+                  "Action": {
+                    "capability": "lua.run",
+                    "version": 1,
+                    "inputs": {
+                      "source": {
+                        "Literal": "local title = values.targetChannelTitle\nassert(type(title) == 'string', 'Current channel title is required')\n\nlocal function is_whitespace(codepoint)\n    return (codepoint >= 0x09 and codepoint <= 0x0D)\n        or codepoint == 0x20 or codepoint == 0x85 or codepoint == 0xA0\n        or codepoint == 0x1680\n        or (codepoint >= 0x2000 and codepoint <= 0x200A)\n        or codepoint == 0x2028 or codepoint == 0x2029\n        or codepoint == 0x202F or codepoint == 0x205F or codepoint == 0x3000\nend\n\nlocal codepoints = {}\nfor _, codepoint in utf8.codes(title) do\n    codepoints[#codepoints + 1] = codepoint\nend\n\nlocal cleaned = {}\nlocal index = 1\nwhile index <= #codepoints do\n    local codepoint = codepoints[index]\n    if codepoint == 0x7C or codepoint == 0x1F409 or codepoint == 0x1FA90 then\n        while #cleaned > 0 and is_whitespace(cleaned[#cleaned]) do\n            cleaned[#cleaned] = nil\n        end\n        repeat\n            index = index + 1\n        until index > #codepoints or codepoints[index] == 0x0A\n    else\n        cleaned[#cleaned + 1] = codepoint\n        index = index + 1\n    end\nend\n\nlocal first, last = 1, #cleaned\nwhile first <= last and is_whitespace(cleaned[first]) do first = first + 1 end\nwhile last >= first and is_whitespace(cleaned[last]) do last = last - 1 end\nlocal parts = {}\nfor position = first, last do\n    parts[#parts + 1] = utf8.char(cleaned[position])\nend\nreturn { cleanTitle = table.concat(parts) }\n"
+                      },
+                      "values": {
+                        "Object": {
+                          "targetChannelTitle": {
+                            "Reference": {
+                              "step_id": "channel",
+                              "output_id": "title",
+                              "fallback": null
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "deadline_ms": null
+                  }
+                }
+              },
+              {
+                "id": "title-name",
+                "on_failure": "Stop",
+                "kind": {
+                  "SetVariable": {
+                    "name": "customTitle",
+                    "value": {
+                      "Reference": {
+                        "step_id": "clean-title",
+                        "output_id": "cleanTitle",
+                        "fallback": null
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "id": "game-name",
+                "on_failure": "Stop",
+                "kind": {
+                  "SetVariable": {
+                    "name": "customGame",
+                    "value": {
+                      "Reference": {
+                        "step_id": "channel",
+                        "output_id": "game_name",
+                        "fallback": null
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "id": "game-chapter",
+                "on_failure": "Stop",
+                "kind": {
+                  "Call": {
+                    "workflow_id": "game-marker",
+                    "binding": "AllNamedArguments"
+                  }
+                }
+              },
+              {
+                "id": "chapter-gap",
+                "on_failure": "Stop",
+                "kind": {
+                  "Delay": {
+                    "millis": 1000
+                  }
+                }
+              },
+              {
+                "id": "title-chapter",
+                "on_failure": "Stop",
+                "kind": {
+                  "Call": {
+                    "workflow_id": "title-marker",
+                    "binding": "AllNamedArguments"
+                  }
+                }
+              }
+            ],
+            "else_steps": []
+          }
+        }
+      }
+    ],
+    "outputs": {}
+  },
+  "triggers": [
+    {
+      "id": "manual",
+      "enabled": true,
+      "kind": {
+        "kind": "manual"
+      }
+    },
+    {
+      "id": "recording-started",
+      "enabled": true,
+      "kind": {
+        "kind": "obs.recording_started"
+      }
+    },
+    {
+      "id": "stream-details-changed",
+      "enabled": true,
+      "kind": {
+        "kind": "integration_event",
+        "integration": "twitch",
+        "event": "channel.details_changed",
+        "filters": {}
+      }
+    }
+  ],
+  "name": "UpdateGameAndTitle"
+}

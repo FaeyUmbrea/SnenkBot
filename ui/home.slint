@@ -1,0 +1,117 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { IconButton } from "controls.slint";
+import { AutomationRow } from "library.slint";
+import { HistoryRow } from "history.slint";
+
+component ConnectionRow inherits Rectangle {
+    in property <string> title;
+    in property <string> status;
+    in property <image> icon;
+    callback open;
+    height: 54px;
+    background: Theme.side;
+    border-radius: 8px;
+    accessible-role: button;
+    accessible-label: title + ": " + status;
+    accessible-action-default => { root.open(); }
+    forward-focus: focus;
+    border-width: focus.has-focus ? 1px : 0px;
+    border-color: Theme.gold;
+    focus := FocusScope {
+        TouchArea { clicked => { focus.focus(); root.open(); } }
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == Key.Space { root.open(); return accept; }
+            return reject;
+        }
+    }
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        spacing: 16px;
+        VerticalLayout { alignment: center; Image { source: root.icon; colorize: Theme.gold; width: 18px; height: 18px; } }
+        Text { text: root.title; color: Theme.text; vertical-alignment: center; width: 28%; }
+        Text { text: root.status; color: Theme.muted; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+        VerticalLayout { alignment: center; Image { source: @image-url("../assets/icons/chevron-down.svg"); colorize: Theme.muted; width: 16px; height: 16px; } }
+    }
+}
+
+export component HomeView inherits Rectangle {
+    in property <string> obs-health;
+    in property <string> vtube-health;
+    in property <string> broadcaster;
+    in property <[AutomationRow]> automations;
+    in property <[HistoryRow]> history;
+    callback settings(int);
+    callback open(string);
+    callback run(string);
+    callback inspect(HistoryRow);
+    background: Theme.ink;
+    ScrollView {
+        horizontal-scrollbar-policy: always-off;
+        VerticalLayout {
+            padding: 24px;
+            spacing: 0px;
+            alignment: start;
+            Text { text: "Connections"; color: Theme.text; font-size: 16px; font-weight: 600; height: 24px; }
+            Rectangle { height: 24px; }
+            VerticalLayout {
+                spacing: 8px;
+                max-width: 1132px;
+                ConnectionRow { title: "OBS Studio"; status: root.obs-health == "" ? "Checking…" : root.obs-health; icon: @image-url("../assets/icons/monitor.svg"); open => { root.settings(4); } }
+                ConnectionRow { title: "Twitch"; status: root.broadcaster == "" ? "Not signed in" : "Signed in as " + root.broadcaster; icon: @image-url("../assets/icons/message-circle.svg"); open => { root.settings(5); } }
+                ConnectionRow { title: "VTube Studio"; status: root.vtube-health == "" ? "Checking…" : root.vtube-health; icon: @image-url("../assets/icons/keyboard.svg"); open => { root.settings(6); } }
+            }
+            Rectangle { height: 56px; }
+            Text { text: "Automations"; color: Theme.text; font-size: 16px; font-weight: 600; height: 24px; }
+            Rectangle { height: 16px; }
+            if root.automations.length == 0: Text { text: "No automations yet."; color: Theme.muted; }
+            HorizontalLayout {
+                spacing: 20px;
+                alignment: start;
+                for item[index] in root.automations: Rectangle {
+                    visible: index < 3;
+                    width: root.width < 1000px ? 240px : 280px;
+                    height: 148px;
+                    background: Theme.side;
+                    border-radius: 8px;
+                    border-width: focus.has-focus ? 1px : 0px;
+                    border-color: Theme.gold;
+                    accessible-role: button;
+                    accessible-label: "Open " + item.title;
+                    accessible-enabled: item.revision > 0;
+                    accessible-action-default => { if item.revision > 0 { root.open(item.id); } }
+                    forward-focus: focus;
+                    focus := FocusScope {
+                        enabled: item.revision > 0;
+                        TouchArea { enabled: item.revision > 0; clicked => { focus.focus(); root.open(item.id); } }
+                        key-pressed(event) => { if event.text == Key.Return || event.text == Key.Space { root.open(item.id); return accept; } return reject; }
+                    }
+                    Rectangle { x: 0px; y: 0px; height: 4px; width: parent.width; background: Theme.maroon; }
+                    Image { x: 16px; y: 20px; width: 18px; height: 18px; colorize: Theme.gold; source: item.icon-kind == 0 ? @image-url("../assets/icons/message-circle.svg") : item.icon-kind == 1 ? @image-url("../assets/icons/monitor.svg") : @image-url("../assets/icons/zap.svg"); }
+                    Text { x: 16px; y: 50px; width: parent.width - 32px; height: 24px; text: item.title; color: Theme.text; font-size: 18px; font-weight: 600; overflow: elide; }
+                    Text { x: 16px; y: 80px; width: parent.width - 32px; height: 18px; text: item.trigger-summary; color: Theme.muted; font-size: 13px; overflow: elide; }
+                    Text { x: 16px; y: 116px; width: parent.width - 72px; height: 18px; text: item.error != "" ? "Needs attention" : item.step-count + " steps"; color: Theme.muted; font-size: 12px; }
+                    IconButton { x: parent.width - 48px; y: 106px; icon: @image-url("../assets/icons/play.svg"); accessible-label: "Run " + item.title; enabled: item.revision > 0 && item.has-steps && item.error == ""; clicked => { root.run(item.id); } }
+                }
+            }
+            Rectangle { height: 56px; }
+            Text { text: "Recent runs"; color: Theme.text; font-size: 16px; font-weight: 600; height: 24px; }
+            Rectangle { height: 16px; }
+            if root.history.length == 0: Text { text: "No workflow runs yet."; color: Theme.muted; }
+            VerticalLayout {
+                spacing: 0px;
+                max-width: 1132px;
+                for item[index] in root.history: ConnectionRow {
+                    visible: index < 3;
+                    height: 48px;
+                    title: item.title;
+                    status: item.outcome + " · " + item.started-at;
+                    icon: @image-url("../assets/icons/history.svg");
+                    open => { root.inspect(item); }
+                }
+            }
+            Rectangle { vertical-stretch: 1; }
+        }
+    }
+}

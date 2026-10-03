@@ -1,0 +1,6 @@
+{
+  "identifier": "main",
+  "description": "Application event delivery for the desktop frontend.",
+  "windows": ["main"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten", "core:event:allow-emit"]
+}

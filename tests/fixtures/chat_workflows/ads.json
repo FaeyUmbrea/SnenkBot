@@ -1,0 +1,46 @@
+{
+  "workflow": {
+    "id": "ads",
+    "revision": 1,
+    "overlap": true,
+    "steps": [
+      {
+        "id": "message",
+        "on_failure": "Stop",
+        "kind": {
+          "Action": {
+            "capability": "twitch.send_chat",
+            "version": 1,
+            "inputs": {
+              "message": {
+                "Text": [
+                  {
+                    "Literal": "An ad break has started."
+                  }
+                ]
+              },
+              "broadcaster_fallback": {
+                "Literal": true
+              }
+            },
+            "deadline_ms": null
+          }
+        }
+      }
+    ],
+    "outputs": {}
+  },
+  "name": "Ads",
+  "triggers": [
+    {
+      "id": "source-trigger",
+      "enabled": true,
+      "kind": {
+        "kind": "integration_event",
+        "integration": "twitch",
+        "event": "ad_break.begin",
+        "filters": {}
+      }
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "workflow": {
+    "id": "game-marker",
+    "revision": 1,
+    "overlap": true,
+    "steps": [
+      {
+        "id": "chapter",
+        "on_failure": "Stop",
+        "kind": {
+          "Action": {
+            "capability": "obs.create_record_chapter",
+            "version": 1,
+            "inputs": {
+              "name": {
+                "Text": [
+                  {
+                    "Literal": "GAME CHANGE: "
+                  },
+                  {
+                    "Value": {
+                      "Variable": {
+                        "name": "customGame",
+                        "fallback": {
+                          "Trigger": {
+                            "name": "customGame",
+                            "fallback": {
+                              "Literal": "Test Game"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "deadline_ms": null
+          }
+        }
+      }
+    ],
+    "outputs": {}
+  },
+  "triggers": [
+    {
+      "id": "manual",
+      "enabled": true,
+      "kind": {
+        "kind": "manual"
+      }
+    }
+  ],
+  "name": "GameChangeMarker"
+}

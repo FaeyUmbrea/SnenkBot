@@ -1,0 +1,52 @@
+@font-face {
+	font-family: 'Inter Tight';
+	src: url('../../../assets/fonts/InterTight.ttf') format('truetype');
+	font-style: normal;
+	font-weight: 100 900;
+	font-display: swap;
+}
+
+:is(.workflow-editor, .desktop-shell) {
+	--ink: #0b0808;
+	--side: #1a1413;
+	--surface: #211916;
+	--field: #0f0b0a;
+	--border: #3b2f2a;
+	--text: #e8e2d9;
+	--muted: #cfc9c2;
+	--blood: #a8232e;
+	--maroon: #7c2330;
+	--amber: #c39440;
+	--gold: #e6c655;
+	font-family: 'Inter Tight', sans-serif;
+	font-size: 14px;
+	color: var(--text);
+	color-scheme: dark;
+}
+
+:is(.workflow-editor, .desktop-shell) *,
+:is(.workflow-editor, .desktop-shell) *::before,
+:is(.workflow-editor, .desktop-shell) *::after {
+	box-sizing: border-box;
+}
+:is(.workflow-editor, .desktop-shell) button,
+:is(.workflow-editor, .desktop-shell) input,
+:is(.workflow-editor, .desktop-shell) select {
+	font: inherit;
+	color: inherit;
+}
+:is(.workflow-editor, .desktop-shell) button {
+	cursor: pointer;
+}
+:is(.workflow-editor, .desktop-shell) button:disabled {
+	cursor: default;
+	opacity: 0.5;
+}
+:is(.workflow-editor, .desktop-shell) :focus-visible {
+	outline: 2px solid var(--gold);
+	outline-offset: 3px;
+}
+:is(.workflow-editor, .desktop-shell) input,
+:is(.workflow-editor, .desktop-shell) select {
+	accent-color: var(--blood);
+}

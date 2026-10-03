@@ -1,0 +1,61 @@
+{
+  "workflow": {
+    "id": "unlurk",
+    "revision": 1,
+    "overlap": true,
+    "steps": [
+      {
+        "id": "message",
+        "on_failure": "Stop",
+        "kind": {
+          "Action": {
+            "capability": "twitch.send_chat",
+            "version": 1,
+            "inputs": {
+              "message": {
+                "Text": [
+                  {
+                    "Literal": "Welcome back, "
+                  },
+                  {
+                    "Value": {
+                      "Trigger": {
+                        "name": "chatter_user_name",
+                        "fallback": null
+                      }
+                    }
+                  },
+                  {
+                    "Literal": "!"
+                  }
+                ]
+              },
+              "broadcaster_fallback": {
+                "Literal": true
+              }
+            },
+            "deadline_ms": null
+          }
+        }
+      }
+    ],
+    "outputs": {}
+  },
+  "name": "Unlurk",
+  "triggers": [
+    {
+      "id": "source-trigger",
+      "enabled": true,
+      "kind": {
+        "kind": "integration_event",
+        "integration": "twitch",
+        "event": "chat.command",
+        "filters": {
+          "command": "!unlurk",
+          "aliases": [],
+          "broadcaster_or_moderator": false
+        }
+      }
+    }
+  ]
+}

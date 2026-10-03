@@ -1,0 +1,721 @@
+import { ScrollView, Palette } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { AppButton, AppCheckBox, AppTextField, IconButton, NavigationItem, SettingsRow, ValueField } from "controls.slint";
+import { WorkflowEditor, WorkflowStep, EditorField, ActionChoice, ActionDraftField, TriggerChoice, ResourceChoice, ControlChoice, ControlField, ControlChild, ValueChoice } from "editor.slint";
+import { WorkflowLibrary, AutomationRow } from "library.slint";
+import { VtubeSettingsView } from "vtube.slint";
+import { RunHistory, HistoryRow } from "history.slint";
+import { AccountCard } from "account.slint";
+import { HomeView } from "home.slint";
+import { WorkflowReferences } from "references.slint";
+import "../assets/fonts/InterTight.ttf";
+
+export struct NavigationEntry { title: string, icon: image }
+export struct ConnectionRow { title: string, detail: string, state: int, integration: string, connection: string }
+export struct PromptField { id: string, label: string, value: string, required: bool }
+
+export component AppWindow inherits Window {
+    init => { Palette.color-scheme = ColorScheme.dark; }
+    title: "SnenkBot";
+    preferred-width: 1440px;
+    preferred-height: 900px;
+    min-width: 1100px;
+    min-height: 560px;
+    background: Theme.ink;
+    default-font-family: Theme.font-family;
+    default-font-size: Theme.body-font-size;
+
+    in-out property <int> page: 0;
+    in property <string> error-message;
+    in property <string> data-path;
+    in property <string> config-path;
+    in property <string> history-path;
+    in-out property <string> obs-host: "127.0.0.1";
+    in-out property <string> obs-port: "4455";
+    in-out property <bool> obs-enabled: false;
+    in-out property <bool> obs-tls: false;
+    in-out property <string> obs-password;
+    in property <string> obs-health;
+    in property <bool> obs-password-stored;
+    in property <bool> obs-password-status-error;
+    in property <int> connection-count;
+    in property <int> connection-total;
+    in property <int> connection-state;
+    in property <[ConnectionRow]> connections;
+    in property <string> obs-save-status;
+    in-out property <bool> obs-save-pending: false;
+    in-out property <int> twitch-login-stage: 0;
+    in-out property <int> twitch-attempt-id: 0;
+    in-out property <bool> twitch-login-bot: false;
+    in property <string> twitch-url;
+    in property <string> twitch-code;
+    in property <string> twitch-review-login;
+    in property <string> twitch-review-id;
+    in property <string> twitch-broadcaster;
+    in property <string> twitch-bot-account;
+    in property <string> twitch-status;
+    in property <[AutomationRow]> automations;
+    in property <[AutomationRow]> obs-usage;
+    in property <[AutomationRow]> vtube-usage;
+    in-out property <string> selected-automation;
+    in-out property <bool> editor-open: false;
+    in-out property <bool> editor-loading: false;
+    in-out property <bool> create-visible: false;
+    in-out property <string> create-name;
+    in property <bool> create-pending: false;
+    in-out property <string> create-error;
+    in property <string> editor-title;
+    in property <string> editor-revision;
+    in property <bool> editor-can-run: false;
+    in property <bool> editor-workflow-enabled: true;
+    callback set-editor-workflow-enabled(bool);
+    in property <[WorkflowStep]> editor-triggers;
+    in property <[WorkflowStep]> editor-steps;
+    in property <[EditorField]> editor-fields;
+    in-out property <string> editor-selected-step;
+    in-out property <int> editor-sidepanel-tab: 0;
+    in-out property <string> editor-action-category: "all";
+    in-out property <string> editor-active-field;
+    in-out property <bool> editor-choice-visible;
+    in-out property <bool> editor-choice-loading;
+    in-out property <string> editor-choice-error;
+    in-out property <string> editor-choice-field;
+    in-out property <bool> editor-choice-new-action;
+    in-out property <string> editor-choice-title;
+    in-out property <[ResourceChoice]> editor-choices;
+    callback request-editor-choices(string, bool);
+    callback choose-editor-choice(string);
+    callback cancel-editor-choices;
+    in-out property <string> editor-draft-value;
+    in-out property <string> editor-edit-error;
+    in-out property <bool> editor-rename-active: false;
+    in-out property <string> editor-rename-draft;
+    in property <bool> editor-edit-pending: false;
+    in property <bool> editor-can-edit-fields: false;
+    in property <bool> editor-can-compose: false;
+    in property <bool> editor-can-add-trigger: false;
+    in property <bool> editor-can-rename: false;
+    in property <bool> editor-can-undo: false;
+    in property <bool> editor-can-redo: false;
+    in-out property <bool> editor-value-visible: false;
+    in-out property <string> editor-value-slot;
+    in-out property <[ValueChoice]> editor-value-choices;
+    in-out property <int> editor-value-selected: -1;
+    in-out property <string> editor-value-fallback-kind;
+    in-out property <string> editor-value-fallback-value;
+    in-out property <string> editor-value-error;
+    callback request-editor-control-values(string);
+    callback request-editor-action-values(string);
+    callback request-editor-action-literal(string);
+    callback request-editor-control-literal(string);
+    callback select-editor-control-value(int);
+    callback set-editor-value-fallback(string, string);
+    callback confirm-editor-control-value();
+    callback cancel-editor-control-values();
+    in-out property <int> editor-control-mode: 0;
+    in-out property <string> editor-control-kind;
+    in-out property <string> editor-control-target;
+    in-out property <string> editor-control-title;
+    in-out property <string> editor-control-parent-title;
+    in-out property <[ControlField]> editor-control-fields;
+    in-out property <string> editor-control-error;
+    in-out property <[ControlChoice]> editor-control-choices;
+    in-out property <[ControlChild]> editor-control-children;
+    in-out property <string> editor-control-insert-parent;
+    in-out property <string> editor-control-insert-branch;
+    in-out property <[ControlChoice]> editor-control-input-types;
+    callback begin-editor-control(string);
+    callback edit-editor-control(string);
+    callback update-editor-control-field(string, string);
+    callback save-editor-control();
+    callback cancel-editor-control();
+    callback begin-editor-control-child(string);
+    callback remove-editor-control-child(string);
+    callback add-editor-child(string, string);
+    callback set-editor-control-input-type(string, string);
+    in-out property <int> editor-action-mode: 0;
+    in property <[ActionChoice]> editor-action-choices;
+    in-out property <string> editor-action-query;
+    in property <string> editor-action-title;
+    in property <[ActionDraftField]> editor-action-fields;
+    in-out property <string> editor-action-error;
+    in-out property <int> editor-trigger-mode: 0;
+    in property <[TriggerChoice]> editor-trigger-choices;
+    in property <string> editor-trigger-title;
+    in-out property <string> editor-trigger-kind;
+    in-out property <string> editor-trigger-scene;
+    in-out property <string> editor-trigger-error;
+    in property <bool> editor-trigger-pending: false;
+    in property <bool> editor-trigger-enabled: false;
+    in-out property <bool> editor-trigger-editing;
+    in-out property <string> editor-trigger-edit-kind;
+    in-out property <string> editor-trigger-edit-scene;
+    in-out property <string> editor-trigger-edit-command;
+    in-out property <string> editor-trigger-edit-aliases;
+    in-out property <bool> editor-trigger-edit-moderator;
+    callback edit-editor-trigger(string);
+    callback save-editor-trigger-edit;
+    callback cancel-editor-trigger-edit;
+    in-out property <string> vtube-host: "127.0.0.1";
+    in-out property <string> vtube-port: "8001";
+    in-out property <bool> vtube-enabled: false;
+    in property <string> vtube-health;
+    in property <string> vtube-status;
+    in property <bool> vtube-pending: true;
+    in property <[HistoryRow]> run-history;
+    in-out property <string> selected-history-run;
+    in-out property <HistoryRow> selected-history-record;
+    in property <string> history-error;
+    in property <bool> history-loading;
+    in property <string> last-run;
+    in-out property <bool> input-visible: false;
+    in property <[PromptField]> input-fields;
+    in property <string> input-title: "Input needed";
+    in property <string> input-error;
+    in property <bool> input-validating: false;
+    callback save-vtube-settings;
+    callback authorize-vtube;
+    callback forget-vtube-authorization;
+    callback refresh-history;
+    pure callback filter-history([HistoryRow], bool, string) -> [HistoryRow];
+    callback dismiss-error;
+    callback run-automation(string);
+    callback open-automation(string);
+    callback create-workflow(string);
+    callback cancel-create-workflow;
+    pure callback filter-automations([AutomationRow], string) -> [AutomationRow];
+    callback select-editor-step(string);
+    callback apply-editor-field(string, string, string);
+    callback remove-editor-field(string, string);
+    callback remove-editor-step(string);
+    callback move-editor-step(string, int);
+    callback apply-editor-name(string);
+    callback undo-editor;
+    callback redo-editor;
+    callback add-editor-trigger;
+    callback search-editor-actions(string);
+    callback choose-editor-action(string, int);
+    callback update-editor-action-field(int, string, bool);
+    callback save-editor-action;
+    callback cancel-editor-action;
+    callback choose-editor-trigger(string);
+    callback save-editor-trigger;
+    callback cancel-editor-trigger;
+    callback set-editor-trigger-enabled(string, bool);
+    callback input-changed(int, string);
+    callback submit-input;
+    callback cancel-input;
+    callback save-obs-settings;
+    callback save-obs-password;
+    callback clear-obs-password;
+    callback start-twitch-login(bool);
+    callback reconfigure-connection(string, string);
+    in-out property <int> reconfigure-return-page: -1;
+    callback open-twitch-url;
+    callback copy-twitch-url;
+    callback copy-twitch-code;
+    callback approve-twitch-login;
+    callback cancel-twitch-login;
+
+    private property <[NavigationEntry]> navigation: [
+        { title: "Home", icon: @image-url("../assets/icons/house.svg") },
+        { title: "Automations", icon: @image-url("../assets/icons/zap.svg") },
+        { title: "Run History", icon: @image-url("../assets/icons/history.svg") },
+        { title: "General", icon: @image-url("../assets/icons/settings.svg") },
+        { title: "Broadcast Apps", icon: @image-url("../assets/icons/monitor.svg") },
+        { title: "Streaming Services", icon: @image-url("../assets/icons/radio.svg") },
+        { title: "Devices & Tools", icon: @image-url("../assets/icons/cable.svg") }
+    ];
+    private property <[string]> descriptions: [
+        "Your stream, at a glance.",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+    ];
+
+    HorizontalLayout {
+        spacing: 0px;
+        Rectangle {
+            width: Theme.sidebar-width;
+            background: Theme.side;
+            VerticalLayout {
+                spacing: 0px;
+                HorizontalLayout {
+                    height: Theme.toolbar-height;
+                    padding-left: 20px;
+                    padding-top: 18px;
+                    padding-bottom: 18px;
+                    padding-right: 16px;
+                    spacing: 8px;
+                    Image {
+                        source: @image-url("../assets/icons/zap.svg");
+                        colorize: Theme.gold;
+                        width: 20px;
+                        height: 20px;
+                        y: (parent.height - self.height) / 2;
+                    }
+                    Text { text: "SnenkBot"; color: Theme.text; font-size: 16px; font-weight: 600; vertical-alignment: center; }
+                }
+                VerticalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    padding-top: 7px;
+                    padding-bottom: 10px;
+                    spacing: 0px;
+                    for entry[index] in root.navigation: VerticalLayout {
+                        spacing: 0px;
+                        if index == 3: Rectangle {
+                            height: 40px;
+                            Rectangle { x: 10px; width: parent.width - 20px; y: 21px; height: 1px; background: Theme.border; }
+                        }
+                        Rectangle {
+                            height: Theme.navigation-row-height;
+                            NavigationItem {
+                                width: parent.width;
+                                height: 34px;
+                                text: entry.title;
+                                icon: entry.icon;
+                                selected: root.page == index;
+                                clicked => { if root.editor-value-visible { root.cancel-editor-control-values(); } else if root.editor-choice-visible { root.cancel-editor-choices(); } root.page = index; if index == 0 || index == 2 { root.refresh-history(); } }
+                            }
+                        }
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                }
+            }
+            Rectangle { x: parent.width - 1px; width: 1px; height: parent.height; background: Theme.border; }
+        }
+        VerticalLayout {
+            spacing: 0px;
+            if root.page != 1 && root.page != 2: Rectangle {
+                height: Theme.toolbar-height;
+                HorizontalLayout {
+                    padding-left: Theme.space-6;
+                    padding-right: Theme.inspector-width + Theme.space-6;
+                    padding-top: 12px;
+                    padding-bottom: 12px;
+                    spacing: Theme.space-3;
+                    if root.reconfigure-return-page >= 0 || root.editor-open || (root.page == 5 && root.twitch-login-stage > 0): IconButton {
+                        icon: @image-url("../assets/icons/arrow-left.svg");
+                        accessible-label: root.page == 5 && root.twitch-login-stage > 0 ? "Back to Twitch accounts" : root.reconfigure-return-page >= 0 ? "Back to " + root.navigation[root.reconfigure-return-page].title : "Back to automation";
+                        clicked => { if root.page == 5 && root.twitch-login-stage > 0 { root.cancel-twitch-login(); } else if root.reconfigure-return-page >= 0 { root.page = root.reconfigure-return-page; root.reconfigure-return-page = -1; } else { root.page = 1; } }
+                    }
+                    Text {
+                        text: root.page == 6 ? "VTube Studio" : root.page == 5 && root.twitch-login-stage > 0 ? "Connect Twitch account" : root.navigation[root.page].title;
+                        color: Theme.text; font-size: 16px; font-weight: 600;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+                }
+            }
+            if root.page != 1 && root.page != 2: Rectangle { height: 1px; background: Theme.border; }
+            if root.error-message != "": Rectangle {
+                min-height: 64px;
+                background: Theme.side;
+                accessible-role: text;
+                accessible-label: root.error-message;
+                HorizontalLayout {
+                    padding: Theme.space-4;
+                    padding-right: root.page == 1 || root.page == 2 ? 208px : Theme.space-4;
+                    spacing: Theme.space-4;
+                    Text { text: root.error-message; color: Theme.gold; wrap: word-wrap; vertical-alignment: center; horizontal-stretch: 1; min-width: 0px; }
+                    IconButton { icon: @image-url("../assets/icons/x.svg"); accessible-label: "Dismiss error"; clicked => { root.dismiss-error(); } }
+                }
+            }
+            Rectangle {
+                vertical-stretch: 1;
+                WorkflowEditor {
+                    width: 100%;
+                    height: 100%;
+                    visible: root.page == 1 && root.editor-open;
+                    workflow-title: root.editor-title;
+                    saved-label: root.editor-revision;
+                    can-run: root.editor-can-run;
+                    workflow-enabled: root.editor-workflow-enabled;
+                    set-workflow-enabled(enabled) => { root.set-editor-workflow-enabled(enabled); }
+                    can-add-action: root.editor-can-compose;
+                    can-add-trigger: root.editor-can-add-trigger;
+                    can-edit-fields: root.editor-can-edit-fields;
+                    can-rename: root.editor-can-rename;
+                    can-show-history: true;
+                    triggers: root.editor-triggers;
+                    steps: root.editor-steps;
+                    inspector-fields: root.editor-fields;
+                    selected-step <=> root.editor-selected-step;
+                    sidepanel-tab <=> root.editor-sidepanel-tab;
+                    action-category <=> root.editor-action-category;
+                    active-field <=> root.editor-active-field;
+                    choice-visible <=> root.editor-choice-visible;
+                    choice-loading: root.editor-choice-loading;
+                    choice-error: root.editor-choice-error;
+                    choice-title: root.editor-choice-title;
+                    choices: root.editor-choices;
+                    request-choices(field, new-action) => { root.request-editor-choices(field, new-action); }
+                    choose-resource(value) => { root.choose-editor-choice(value); }
+                    cancel-choices => { root.cancel-editor-choices(); }
+                    draft-value <=> root.editor-draft-value;
+                    edit-error <=> root.editor-edit-error;
+                    rename-active <=> root.editor-rename-active;
+                    rename-draft <=> root.editor-rename-draft;
+                    edit-pending: root.editor-edit-pending;
+                    can-undo: root.editor-can-undo;
+                    can-redo: root.editor-can-redo;
+                    value-visible <=> root.editor-value-visible;
+                    value-slot <=> root.editor-value-slot;
+                    value-choices <=> root.editor-value-choices;
+                    value-selected <=> root.editor-value-selected;
+                    value-fallback-kind <=> root.editor-value-fallback-kind;
+                    value-fallback-value <=> root.editor-value-fallback-value;
+                    value-error <=> root.editor-value-error;
+                    request-control-values(slot) => { root.request-editor-control-values(slot); }
+                    request-action-values(field) => { root.request-editor-action-values(field); }
+                    request-action-literal(field) => { root.request-editor-action-literal(field); }
+                    request-control-literal(slot) => { root.request-editor-control-literal(slot); }
+                    select-control-value(index) => { root.select-editor-control-value(index); }
+                    set-value-fallback(kind, value) => { root.set-editor-value-fallback(kind, value); }
+                    confirm-control-value => { root.confirm-editor-control-value(); }
+                    cancel-control-values => { root.cancel-editor-control-values(); }
+                    control-mode <=> root.editor-control-mode;
+                    control-kind: root.editor-control-kind;
+                    control-target: root.editor-control-target;
+                    control-title: root.editor-control-title;
+                    control-parent-title: root.editor-control-parent-title;
+                    control-fields: root.editor-control-fields;
+                    control-error: root.editor-control-error;
+                    control-choices: root.editor-control-choices;
+                    control-children: root.editor-control-children;
+                    control-insert-parent: root.editor-control-insert-parent;
+                    control-insert-branch: root.editor-control-insert-branch;
+                    control-input-types: root.editor-control-input-types;
+                    begin-control(kind) => { root.begin-editor-control(kind); }
+                    edit-control(id) => { root.edit-editor-control(id); }
+                    update-control-field(id, value) => { root.update-editor-control-field(id, value); }
+                    save-control => { root.save-editor-control(); }
+                    cancel-control => { root.cancel-editor-control(); }
+                    begin-control-child(branch) => { root.begin-editor-control-child(branch); }
+                    remove-control-child(id) => { root.remove-editor-control-child(id); }
+                    add-child(parent, branch) => { root.add-editor-child(parent, branch); }
+                    set-control-input-type(slot, kind) => { root.set-editor-control-input-type(slot, kind); }
+                    action-mode <=> root.editor-action-mode;
+                    action-choices: root.editor-action-choices;
+                    action-query <=> root.editor-action-query;
+                    action-title: root.editor-action-title;
+                    action-fields: root.editor-action-fields;
+                    action-error <=> root.editor-action-error;
+                    trigger-mode <=> root.editor-trigger-mode;
+                    trigger-choices: root.editor-trigger-choices;
+                    trigger-title: root.editor-trigger-title;
+                    trigger-kind <=> root.editor-trigger-kind;
+                    trigger-scene <=> root.editor-trigger-scene;
+                    trigger-error <=> root.editor-trigger-error;
+                    trigger-pending: root.editor-trigger-pending;
+                    selected-trigger-enabled: root.editor-trigger-enabled;
+                    trigger-editing <=> root.editor-trigger-editing;
+                    trigger-edit-kind <=> root.editor-trigger-edit-kind;
+                    trigger-edit-scene <=> root.editor-trigger-edit-scene;
+                    trigger-edit-command <=> root.editor-trigger-edit-command;
+                    trigger-edit-aliases <=> root.editor-trigger-edit-aliases;
+                    trigger-edit-moderator <=> root.editor-trigger-edit-moderator;
+                    edit-trigger(id) => { root.edit-editor-trigger(id); }
+                    save-trigger-edit => { root.save-editor-trigger-edit(); }
+                    cancel-trigger-edit => { root.cancel-editor-trigger-edit(); }
+                    back => {
+                        if root.editor-value-visible { root.cancel-editor-control-values(); }
+                        else if root.editor-choice-visible { root.cancel-editor-choices(); }
+                        else if root.editor-trigger-mode != 0 { root.cancel-editor-trigger(); }
+                        else if root.editor-action-mode == 2 { root.cancel-editor-action(); }
+                        else if root.editor-action-mode == 1 { root.cancel-editor-action(); }
+                        else if root.editor-control-mode != 0 { root.cancel-editor-control(); }
+                        else { root.editor-open = false; }
+                    }
+                    run => { root.run-automation(root.selected-automation); }
+                    history => { root.page = 2; root.refresh-history(); }
+                    add-trigger => { root.add-editor-trigger(); }
+                    select-step(id) => { root.select-editor-step(id); }
+                    apply-field(step-id, field-id, value) => { root.apply-editor-field(step-id, field-id, value); }
+                    remove-field(step-id, field-id) => { root.remove-editor-field(step-id, field-id); }
+                    apply-name(name) => { root.apply-editor-name(name); }
+                    undo => { root.undo-editor(); }
+                    redo => { root.redo-editor(); }
+                    add-action => { root.editor-action-mode = 1; root.editor-sidepanel-tab = 0; }
+                    search-actions(query) => { root.search-editor-actions(query); }
+                    remove-step(id) => { root.remove-editor-step(id); }
+                    move-step(id, direction) => { root.move-editor-step(id, direction); }
+                    choose-action(capability, version) => { root.choose-editor-action(capability, version); }
+                    update-action-field(index, value, configured) => { root.update-editor-action-field(index, value, configured); }
+                    save-action => { root.save-editor-action(); }
+                    cancel-action => { root.cancel-editor-action(); }
+                    choose-trigger(kind) => { root.choose-editor-trigger(kind); }
+                    save-trigger => { root.save-editor-trigger(); }
+                    cancel-trigger => { root.cancel-editor-trigger(); }
+                    set-trigger-enabled(id, enabled) => { root.set-editor-trigger-enabled(id, enabled); }
+                }
+                WorkflowLibrary {
+                    width: 100%;
+                    height: 100%;
+                    visible: root.page == 1 && !root.editor-open;
+                    automations: root.automations;
+                    selected-automation <=> root.selected-automation;
+                    create-visible <=> root.create-visible;
+                    create-name <=> root.create-name;
+                    create-pending: root.create-pending;
+                    create-error <=> root.create-error;
+                    loading: root.editor-loading;
+                    open(id) => { root.open-automation(id); }
+                    create(name) => { root.create-workflow(name); }
+                    cancel-create => { root.cancel-create-workflow(); }
+                    filter-automations(rows, query) => { return root.filter-automations(rows, query); }
+                }
+                RunHistory {
+                    width: 100%; height: 100%; visible: root.page == 2;
+                    run-history: root.run-history;
+                    history-error: root.history-error;
+                    history-loading: root.history-loading;
+                    selected-run-id <=> root.selected-history-run;
+                    selected-record <=> root.selected-history-record;
+                    can-return-to-workflow: root.editor-open;
+                    return-to-workflow => { root.page = 1; }
+                    refresh-history => { root.refresh-history(); }
+                    filter-history(rows, failed, query) => { return root.filter-history(rows, failed, query); }
+                    open-history-workflow(id) => { root.page = 1; root.selected-automation = id; root.open-automation(id); }
+                }
+                VtubeSettingsView {
+                    width: 100%; height: 100%; visible: root.page == 6;
+                    host <=> root.vtube-host; port <=> root.vtube-port;
+                    enabled <=> root.vtube-enabled;
+                    health: root.vtube-health; status: root.vtube-status; pending: root.vtube-pending;
+                    workflows: root.vtube-usage;
+                    open-workflow(id) => { root.page = 1; root.selected-automation = id; root.open-automation(id); }
+                    save-settings => { root.save-vtube-settings(); }
+                    authorize => { root.authorize-vtube(); }
+                    forget-authorization => { root.forget-vtube-authorization(); }
+                }
+                HomeView {
+                    width: 100%; height: 100%; visible: root.page == 0;
+                    obs-health: root.obs-health; vtube-health: root.vtube-health; broadcaster: root.twitch-broadcaster;
+                    automations: root.automations; history: root.run-history;
+                    settings(page) => { root.page = page; }
+                    open(id) => { root.page = 1; root.selected-automation = id; root.open-automation(id); }
+                    run(id) => { root.run-automation(id); }
+                    inspect(record) => { root.selected-history-run = record.run-id; root.selected-history-record = record; root.page = 2; }
+                }
+                if root.page != 0 && root.page != 1 && root.page != 2 && root.page != 6: ScrollView {
+                    width: 100%;
+                    height: 100%;
+                    VerticalLayout {
+                        padding-left: Theme.space-6;
+                        padding-right: Theme.space-6;
+                        padding-top: 40px;
+                        padding-bottom: Theme.space-6;
+                        spacing: Theme.space-6;
+                        if root.descriptions[root.page] != "": Text { text: root.descriptions[root.page]; color: Theme.muted; wrap: word-wrap; }
+                        if root.page == 0: AppButton {
+                            text: "Automations";
+                            icon: @image-url("../assets/icons/zap.svg");
+                            width: 160px;
+                            clicked => { root.page = 1; }
+                        }
+                        if root.page == 3: VerticalLayout {
+                            spacing: 24px;
+                            max-width: 920px;
+                            Text { text: "Configuration"; color: Theme.text; font-size: 16px; font-weight: 600; height: 24px; }
+                            VerticalLayout {
+                                spacing: 0px;
+                                SettingsRow { label: "Workflows"; Text { text: root.data-path; color: Theme.muted; wrap: word-wrap; vertical-alignment: center; font-size: 13px; } }
+                                SettingsRow { label: "Integration settings"; Text { text: root.config-path; color: Theme.muted; wrap: word-wrap; vertical-alignment: center; font-size: 13px; } }
+                                SettingsRow { separator: false; label: "Run history"; Text { text: root.history-path; color: Theme.muted; wrap: word-wrap; vertical-alignment: center; font-size: 13px; } }
+                            }
+                        }
+                        if root.page == 4: VerticalLayout {
+                            spacing: Theme.space-4;
+                            alignment: start;
+                            max-width: 920px;
+                            Text { text: "OBS Studio"; color: Theme.text; font-size: 16px; font-weight: 600; height: 20px; }
+                            HorizontalLayout {
+                                height: 32px;
+                                Text { text: root.obs-health; color: Theme.muted; wrap: word-wrap; vertical-alignment: center; horizontal-stretch: 1; }
+                                AppCheckBox { text: "Enable OBS"; checked <=> root.obs-enabled; enabled: !root.obs-save-pending; }
+                            }
+                            VerticalLayout {
+                                spacing: 0px;
+                                SettingsRow { label: "Server"; AppTextField { text <=> root.obs-host; label: "OBS host"; enabled: !root.obs-save-pending; } }
+                                SettingsRow { label: "Port"; AppTextField { text <=> root.obs-port; label: "OBS port"; enabled: !root.obs-save-pending; } }
+                                SettingsRow { label: "Password"; AppTextField { text <=> root.obs-password; label: "OBS password"; input-type: password; } }
+                                SettingsRow { separator: false; label: "Encryption"; AppCheckBox { text: "Use TLS"; checked <=> root.obs-tls; enabled: !root.obs-save-pending; } }
+                            }
+                            HorizontalLayout {
+                                spacing: Theme.space-4;
+                                Text { text: "Changes apply when you save."; color: Theme.muted; vertical-alignment: center; horizontal-stretch: 1; }
+                                AppButton { text: root.obs-save-pending ? "Saving…" : "Save connection"; primary: true; width: 152px; enabled: !root.obs-save-pending; clicked => { root.save-obs-settings(); } }
+                            }
+                            if root.obs-save-status != "": Text { text: root.obs-save-status; color: Theme.muted; wrap: word-wrap; }
+                            Rectangle { height: Theme.space-4; }
+                            HorizontalLayout {
+                                spacing: Theme.space-2;
+                                Text { text: root.obs-password-status-error ? "Stored password could not be accessed." : root.obs-password-stored ? "A password is stored." : "No password is stored."; color: Theme.muted; wrap: word-wrap; vertical-alignment: center; horizontal-stretch: 1; }
+                                AppButton { text: "Remove password"; enabled: root.obs-password-stored || root.obs-password-status-error; width: 152px; clicked => { root.clear-obs-password(); } }
+                                AppButton { text: "Save password"; primary: true; width: 140px; clicked => { root.save-obs-password(); } }
+                            }
+                            Rectangle { height: 24px; }
+                            WorkflowReferences { workflows: root.obs-usage; open(id) => { root.page = 1; root.selected-automation = id; root.open-automation(id); } }
+                        }
+                        if root.page == 5: VerticalLayout {
+                            spacing: 32px;
+                            max-width: 920px;
+                            Text { text: "Twitch"; color: Theme.text; font-size: 16px; font-weight: 600; height: 16px; }
+                            if root.twitch-login-stage == 0: AccountCard { title: "Broadcaster Account"; account: root.twitch-broadcaster; description: "Account for channel events and broadcaster actions."; connect-label: "Connect broadcaster"; enabled: root.twitch-login-stage != 4; connect => { root.start-twitch-login(false); } }
+                            if root.twitch-login-stage == 0: AccountCard { title: "Bot Account · optional"; account: root.twitch-bot-account; description: "Account used to send chat messages."; connect-label: "Connect bot"; enabled: root.twitch-login-stage != 4; connect => { root.start-twitch-login(true); } }
+                            if root.twitch-login-stage == 0: Text { text: "A separate bot account is optional. Without one, SnenkBot uses your broadcaster account for bot features such as sending chat messages. For the best experience, use your broadcaster account or make your bot a moderator in your channel—Twitch gives these accounts higher chat message limits."; color: Theme.muted; wrap: word-wrap; max-width: 600px; }
+                            if root.twitch-status != "": Text { text: root.twitch-status; color: Theme.muted; wrap: word-wrap; }
+                            if root.twitch-login-stage == 2: VerticalLayout {
+                                spacing: Theme.space-3;
+                                Text { text: "Sign in as " + (root.twitch-login-bot ? "bot" : "broadcaster"); color: Theme.text; font-weight: 600; }
+                                Text { text: root.twitch-url; color: Theme.text; wrap: word-wrap; }
+                                Text { text: root.twitch-code; color: Theme.gold; font-size: 22px; font-weight: 600; }
+                                HorizontalLayout {
+                                    spacing: Theme.space-2;
+                                    AppButton { text: "Open in browser"; clicked => { root.open-twitch-url(); } }
+                                    AppButton { text: "Copy link"; clicked => { root.copy-twitch-url(); } }
+                                    AppButton { text: "Copy code"; clicked => { root.copy-twitch-code(); } }
+                                    Rectangle { horizontal-stretch: 1; }
+                                }
+                                Text { text: "The same code stays active if you open the link in an incognito window. Waiting for Twitch…"; color: Theme.muted; wrap: word-wrap; }
+                            }
+                            if root.twitch-login-stage == 3: VerticalLayout {
+                                spacing: Theme.space-3;
+                                Text { text: "Confirm " + (root.twitch-login-bot ? "bot" : "broadcaster") + " account"; color: Theme.text; font-weight: 600; }
+                                Text { text: root.twitch-review-login + " (" + root.twitch-review-id + ")"; color: Theme.text; }
+                                AppButton { text: "Use this account"; primary: true; clicked => { root.approve-twitch-login(); } }
+                            }
+                            if root.twitch-login-stage > 0 && root.twitch-login-stage < 4: AppButton {
+                                text: "Cancel sign-in";
+                                clicked => { root.cancel-twitch-login(); }
+                            }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                }
+            }
+        }
+    }
+    Rectangle {
+        x: root.width - 200px;
+        y: 12px;
+        width: 176px;
+        height: 32px;
+        AppButton {
+            width: 100%;
+            text: "Connected " + root.connection-count + "/" + root.connection-total;
+            accessible-label: self.text + ". Show connection details";
+            clicked => { connection-popup.show(); }
+        }
+        Rectangle {
+            x: 12px; y: 12px; width: 8px; height: 8px; border-radius: 4px;
+            background: root.connection-state == 3 ? Theme.blood : root.connection-state == 1 ? Theme.gold : root.connection-state == 2 ? #6A9B71 : Theme.muted;
+        }
+    }
+    connection-popup := PopupWindow {
+        x: root.width - 384px - 24px;
+        y: 48px;
+        width: 384px;
+        height: min(root.height - 72px, 460px);
+        Rectangle {
+            background: Theme.side;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: 8px;
+            VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
+                HorizontalLayout {
+                    height: 32px;
+                    Text { text: "Connections"; color: Theme.text; font-size: 16px; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
+                    IconButton { icon: @image-url("../assets/icons/x.svg"); accessible-label: "Close connection details"; clicked => { connection-popup.close(); } }
+                }
+                ScrollView {
+                    horizontal-scrollbar-policy: always-off;
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        spacing: 12px;
+                        for connection in root.connections: Rectangle {
+                            height: max(64px, connection-layout.preferred-height);
+                            background: Theme.surface;
+                            border-radius: 6px;
+                            connection-layout := HorizontalLayout {
+                                padding: 12px;
+                                spacing: 12px;
+                                Rectangle {
+                                    width: 8px; height: 8px; border-radius: 4px;
+                                    background: connection.state == 3 ? Theme.blood : connection.state == 1 ? Theme.gold : connection.state == 2 ? #6A9B71 : Theme.muted;
+                                }
+                                VerticalLayout {
+                                    spacing: 4px;
+                                    Text { text: connection.title; color: Theme.text; font-weight: 600; wrap: word-wrap; }
+                                    Text { text: connection.detail; color: Theme.muted; wrap: word-wrap; }
+                                    if connection.integration != "": AppButton {
+                                        text: "Reconnect";
+                                        primary: true;
+                                        height: 32px;
+                                        clicked => {
+                                            root.reconfigure-connection(connection.integration, connection.connection);
+                                            connection-popup.close();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                }
+            }
+        }
+    }
+    if root.input-visible: Rectangle {
+        background: #B00B0808;
+        TouchArea { }
+        Rectangle {
+            width: min(parent.width - 48px, 480px);
+            height: min(parent.height - 48px, 140px + root.input-fields.length * 76px + (root.input-error != "" ? 48px : 0px));
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: Theme.side;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: 8px;
+            VerticalLayout {
+                padding: Theme.space-6;
+                spacing: Theme.space-4;
+                Text { text: root.input-title; color: Theme.text; font-size: 18px; font-weight: 600; height: 24px; }
+                ScrollView {
+                    horizontal-scrollbar-policy: always-off;
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        spacing: Theme.space-4;
+                        for field[index] in root.input-fields: VerticalLayout {
+                            spacing: Theme.space-2;
+                            Text { text: field.label + (field.required ? " *" : ""); color: Theme.muted; wrap: word-wrap; }
+                            AppTextField {
+                                label: field.label;
+                                enabled: !root.input-validating;
+                                text: field.value;
+                                edited(value) => { root.input-changed(index, value); }
+                            }
+                        }
+                        if root.input-error != "": Text { text: root.input-error; color: Theme.gold; wrap: word-wrap; }
+                        Rectangle { vertical-stretch: 1; }
+                    }
+                }
+                HorizontalLayout {
+                    height: 32px;
+                    spacing: Theme.space-2;
+                    Rectangle { horizontal-stretch: 1; }
+                    AppButton { text: "Cancel"; width: 88px; clicked => { root.cancel-input(); } }
+                    AppButton { text: root.input-validating ? "Checking…" : "Apply"; width: 96px; primary: true; enabled: !root.input-validating; clicked => { root.submit-input(); } }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,61 @@
+{
+  "workflow": {
+    "id": "lurk",
+    "revision": 1,
+    "overlap": true,
+    "steps": [
+      {
+        "id": "message",
+        "on_failure": "Stop",
+        "kind": {
+          "Action": {
+            "capability": "twitch.send_chat",
+            "version": 1,
+            "inputs": {
+              "message": {
+                "Text": [
+                  {
+                    "Literal": "Enjoy lurking, "
+                  },
+                  {
+                    "Value": {
+                      "Trigger": {
+                        "name": "chatter_user_name",
+                        "fallback": null
+                      }
+                    }
+                  },
+                  {
+                    "Literal": "!"
+                  }
+                ]
+              },
+              "broadcaster_fallback": {
+                "Literal": true
+              }
+            },
+            "deadline_ms": null
+          }
+        }
+      }
+    ],
+    "outputs": {}
+  },
+  "name": "Lurk",
+  "triggers": [
+    {
+      "id": "source-trigger",
+      "enabled": true,
+      "kind": {
+        "kind": "integration_event",
+        "integration": "twitch",
+        "event": "chat.command",
+        "filters": {
+          "command": "!lurk",
+          "aliases": [],
+          "broadcaster_or_moderator": false
+        }
+      }
+    }
+  ]
+}

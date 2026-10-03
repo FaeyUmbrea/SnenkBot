@@ -1,0 +1,50 @@
+{
+  "workflow": {
+    "id": "discord",
+    "revision": 1,
+    "overlap": true,
+    "steps": [
+      {
+        "id": "message",
+        "on_failure": "Stop",
+        "kind": {
+          "Action": {
+            "capability": "twitch.send_chat",
+            "version": 1,
+            "inputs": {
+              "message": {
+                "Text": [
+                  {
+                    "Literal": "Community information."
+                  }
+                ]
+              },
+              "broadcaster_fallback": {
+                "Literal": true
+              }
+            },
+            "deadline_ms": null
+          }
+        }
+      }
+    ],
+    "outputs": {}
+  },
+  "name": "Discord",
+  "triggers": [
+    {
+      "id": "source-trigger",
+      "enabled": true,
+      "kind": {
+        "kind": "integration_event",
+        "integration": "twitch",
+        "event": "chat.command",
+        "filters": {
+          "command": "!discord",
+          "aliases": [],
+          "broadcaster_or_moderator": false
+        }
+      }
+    }
+  ]
+}

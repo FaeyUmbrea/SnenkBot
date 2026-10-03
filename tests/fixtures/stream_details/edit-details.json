@@ -1,0 +1,237 @@
+{
+  "workflow": {
+    "id": "edit-details",
+    "revision": 1,
+    "overlap": true,
+    "steps": [
+      {
+        "id": "channel",
+        "on_failure": "Stop",
+        "kind": {
+          "Action": {
+            "capability": "twitch.get_channel",
+            "version": 1,
+            "inputs": {},
+            "deadline_ms": null
+          }
+        }
+      },
+      {
+        "id": "clean-title",
+        "on_failure": "Stop",
+        "kind": {
+          "Action": {
+            "capability": "lua.run",
+            "version": 1,
+            "inputs": {
+              "source": {
+                "Literal": "local title = values.targetChannelTitle\nassert(type(title) == 'string', 'Current channel title is required')\n\nlocal function is_whitespace(codepoint)\n    return (codepoint >= 0x09 and codepoint <= 0x0D)\n        or codepoint == 0x20 or codepoint == 0x85 or codepoint == 0xA0\n        or codepoint == 0x1680\n        or (codepoint >= 0x2000 and codepoint <= 0x200A)\n        or codepoint == 0x2028 or codepoint == 0x2029\n        or codepoint == 0x202F or codepoint == 0x205F or codepoint == 0x3000\nend\n\nlocal codepoints = {}\nfor _, codepoint in utf8.codes(title) do\n    codepoints[#codepoints + 1] = codepoint\nend\n\nlocal cleaned = {}\nlocal index = 1\nwhile index <= #codepoints do\n    local codepoint = codepoints[index]\n    if codepoint == 0x7C or codepoint == 0x1F409 or codepoint == 0x1FA90 then\n        while #cleaned > 0 and is_whitespace(cleaned[#cleaned]) do\n            cleaned[#cleaned] = nil\n        end\n        repeat\n            index = index + 1\n        until index > #codepoints or codepoints[index] == 0x0A\n    else\n        cleaned[#cleaned + 1] = codepoint\n        index = index + 1\n    end\nend\n\nlocal first, last = 1, #cleaned\nwhile first <= last and is_whitespace(cleaned[first]) do first = first + 1 end\nwhile last >= first and is_whitespace(cleaned[last]) do last = last - 1 end\nlocal parts = {}\nfor position = first, last do\n    parts[#parts + 1] = utf8.char(cleaned[position])\nend\nreturn { cleanTitle = table.concat(parts) }\n"
+              },
+              "values": {
+                "Object": {
+                  "targetChannelTitle": {
+                    "Reference": {
+                      "step_id": "channel",
+                      "output_id": "title",
+                      "fallback": null
+                    }
+                  }
+                }
+              }
+            },
+            "deadline_ms": null
+          }
+        }
+      },
+      {
+        "id": "edit-details",
+        "on_failure": "Stop",
+        "kind": {
+          "RequestInput": {
+            "title": "Edit stream details",
+            "fields": [
+              {
+                "id": "customTitle",
+                "label": "Title",
+                "default": {
+                  "Reference": {
+                    "step_id": "clean-title",
+                    "output_id": "cleanTitle",
+                    "fallback": null
+                  }
+                },
+                "required": false,
+                "validator": null
+              },
+              {
+                "id": "customGame",
+                "label": "Game",
+                "default": {
+                  "Reference": {
+                    "step_id": "channel",
+                    "output_id": "game_name",
+                    "fallback": null
+                  }
+                },
+                "required": true,
+                "validator": "twitch.game"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "choose-title",
+        "on_failure": "Stop",
+        "kind": {
+          "If": {
+            "condition": {
+              "NullOrEmpty": {
+                "Reference": {
+                  "step_id": "edit-details",
+                  "output_id": "customTitle",
+                  "fallback": {
+                    "Literal": ""
+                  }
+                }
+              }
+            },
+            "then_steps": [
+              {
+                "id": "keep-title",
+                "on_failure": "Stop",
+                "kind": {
+                  "SetVariable": {
+                    "name": "customTitle",
+                    "value": {
+                      "Reference": {
+                        "step_id": "clean-title",
+                        "output_id": "cleanTitle",
+                        "fallback": null
+                      }
+                    }
+                  }
+                }
+              }
+            ],
+            "else_steps": [
+              {
+                "id": "new-title",
+                "on_failure": "Stop",
+                "kind": {
+                  "SetVariable": {
+                    "name": "customTitle",
+                    "value": {
+                      "Reference": {
+                        "step_id": "edit-details",
+                        "output_id": "customTitle",
+                        "fallback": {
+                          "Literal": ""
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "resolve-game",
+        "on_failure": "Stop",
+        "kind": {
+          "Action": {
+            "capability": "twitch.find_game",
+            "version": 1,
+            "inputs": {
+              "name": {
+                "Reference": {
+                  "step_id": "edit-details",
+                  "output_id": "customGame",
+                  "fallback": null
+                }
+              }
+            },
+            "deadline_ms": null
+          }
+        }
+      },
+      {
+        "id": "game-name",
+        "on_failure": "Stop",
+        "kind": {
+          "SetVariable": {
+            "name": "customGame",
+            "value": {
+              "Reference": {
+                "step_id": "resolve-game",
+                "output_id": "name",
+                "fallback": null
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "set-game",
+        "on_failure": "Stop",
+        "kind": {
+          "Action": {
+            "capability": "twitch.set_channel",
+            "version": 1,
+            "inputs": {
+              "game_id": {
+                "Reference": {
+                  "step_id": "resolve-game",
+                  "output_id": "id",
+                  "fallback": null
+                }
+              }
+            },
+            "deadline_ms": null
+          }
+        }
+      },
+      {
+        "id": "set-title",
+        "on_failure": "Stop",
+        "kind": {
+          "Action": {
+            "capability": "twitch.set_channel",
+            "version": 1,
+            "inputs": {
+              "title": {
+                "Text": [
+                  {
+                    "Value": {
+                      "Variable": {
+                        "name": "customTitle",
+                        "fallback": null
+                      }
+                    }
+                  },
+                  {
+                    "Literal": " | Example channel"
+                  }
+                ]
+              }
+            },
+            "deadline_ms": null
+          }
+        }
+      }
+    ],
+    "outputs": {}
+  },
+  "triggers": [
+    {
+      "id": "manual",
+      "enabled": true,
+      "kind": {
+        "kind": "manual"
+      }
+    }
+  ],
+  "name": "SetTitleAndGame"
+}

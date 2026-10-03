@@ -1,0 +1,390 @@
+import { CheckBox } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+export component AppCheckBox inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    in-out property <bool> checked;
+    out property <bool> has-focus: native.has-focus;
+    callback toggled;
+    height: 32px;
+    forward-focus: native;
+    accessible-role: none;
+    HorizontalLayout {
+        native := CheckBox {
+            text: root.text;
+            enabled: root.enabled;
+            checked <=> root.checked;
+            toggled => { root.toggled(); }
+        }
+    }
+    // Keep the standard checkbox's input, focus and accessibility behavior.
+    Rectangle {
+        x: 0px;
+        y: (parent.height - self.height) / 2;
+        width: 18px;
+        height: 18px;
+        background: root.checked ? Theme.blood : Theme.field;
+        border-width: 1px;
+        border-color: root.has-focus ? Theme.gold : Theme.border;
+        border-radius: 3px;
+        opacity: root.enabled ? 1 : 0.46;
+        accessible-role: none;
+        Image {
+            x: 3px; y: 3px; width: 12px; height: 12px;
+            visible: root.checked;
+            source: @image-url("../assets/icons/check.svg");
+            colorize: Theme.text;
+            accessible-role: none;
+        }
+    }
+}
+
+export component AppTextField inherits Rectangle {
+    in-out property <string> text;
+    in property <string> label;
+    in property <bool> enabled: true;
+    in property <InputType> input-type: InputType.text;
+    callback edited(string);
+
+    height: 32px;
+    background: Theme.surface;
+    border-width: input.has-focus ? 1px : 0px;
+    border-color: Theme.gold;
+    border-radius: 4px;
+    opacity: enabled ? 1 : 0.58;
+    forward-focus: input;
+
+    ContextMenuArea {
+        x: Theme.space-3;
+        y: 0px;
+        width: parent.width - 2 * Theme.space-3;
+        height: parent.height;
+        enabled: root.enabled;
+        Menu {
+            MenuItem {
+                title: "Cut";
+                enabled: root.enabled && root.input-type != InputType.password && root.text != "";
+                activated => { input.cut(); }
+            }
+            MenuItem {
+                title: "Copy";
+                enabled: root.input-type != InputType.password && root.text != "";
+                activated => { input.copy(); }
+            }
+            MenuItem {
+                title: "Paste";
+                enabled: root.enabled;
+                activated => { input.paste(); }
+            }
+            MenuItem {
+                title: "Select All";
+                enabled: root.text != "";
+                activated => { input.select-all(); }
+            }
+        }
+        input := TextInput {
+            y: (parent.height - self.height) / 2;
+            width: parent.width;
+            height: 22px;
+            text <=> root.text;
+            accessible-label: root.label;
+            enabled: root.enabled;
+            input-type: root.input-type;
+            single-line: true;
+            color: Theme.text;
+            selection-background-color: Theme.blood;
+            selection-foreground-color: Theme.text;
+            key-pressed(event) => {
+                if root.input-type == InputType.password && event.modifiers.control && (event.text == "c" || event.text == "C" || event.text == "x" || event.text == "X") {
+                    return accept;
+                }
+                return reject;
+            }
+            edited => { root.edited(self.text); }
+        }
+    }
+}
+
+export component AppButton inherits Rectangle {
+    in property <string> text;
+    in property <image> icon;
+    in property <bool> primary: false;
+    in property <bool> enabled: true;
+    out property <bool> has-focus: focus-area.has-focus;
+    callback clicked;
+
+    height: 32px;
+    min-width: 32px;
+    background: primary ? Theme.blood : Theme.surface;
+    border-color: has-focus ? Theme.gold : Theme.border;
+    border-width: has-focus ? 1px : 0px;
+    border-radius: 6px;
+    opacity: enabled ? 1 : 0.46;
+    forward-focus: focus-area;
+
+    accessible-role: button;
+    accessible-enabled: enabled;
+    accessible-label: text;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+
+    focus-area := FocusScope {
+        width: 100%;
+        height: 100%;
+        enabled: root.enabled;
+        TouchArea {
+            width: 100%;
+            height: 100%;
+            enabled: root.enabled;
+            clicked => { focus-area.focus(); root.clicked(); }
+        }
+        key-pressed(event) => {
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    HorizontalLayout {
+        spacing: Theme.space-2;
+        padding-left: Theme.space-3;
+        padding-right: Theme.space-3;
+
+        VerticalLayout {
+            alignment: center;
+            HorizontalLayout {
+                alignment: center;
+                spacing: Theme.space-2;
+
+                if root.icon.width > 0 && root.icon.height > 0: VerticalLayout { alignment: center; Image {
+                    source: root.icon;
+                    width: 18px;
+                    height: 18px;
+                    colorize: Theme.text;
+                    accessible-role: none;
+                } }
+
+                if root.text != "": Text {
+                    text: root.text;
+                    color: Theme.text;
+                    font-family: Theme.font-family;
+                    font-size: Theme.body-font-size;
+                    vertical-alignment: center;
+                    accessible-role: none;
+                }
+            }
+        }
+    }
+}
+
+export component IconButton inherits Rectangle {
+    in property <image> icon;
+    in property <bool> primary: false;
+    in property <bool> enabled: true;
+    out property <bool> has-focus: focus-area.has-focus;
+    callback clicked;
+
+    width: 32px;
+    height: 32px;
+    background: primary ? Theme.blood : Theme.surface;
+    border-color: has-focus ? Theme.gold : Theme.border;
+    border-width: has-focus ? 1px : 0px;
+    border-radius: 6px;
+    opacity: enabled ? 1 : 0.46;
+    forward-focus: focus-area;
+
+    accessible-role: button;
+    accessible-enabled: enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+
+    focus-area := FocusScope {
+        width: 100%;
+        height: 100%;
+        enabled: root.enabled;
+        TouchArea {
+            width: 100%;
+            height: 100%;
+            enabled: root.enabled;
+            clicked => { focus-area.focus(); root.clicked(); }
+        }
+        key-pressed(event) => {
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    Image {
+        source: root.icon;
+        width: 18px;
+        height: 18px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        colorize: Theme.text;
+        accessible-role: none;
+    }
+}
+
+export component NavigationItem inherits Rectangle {
+    in property <string> text;
+    in property <image> icon;
+    in property <bool> selected: false;
+    in property <bool> enabled: true;
+    out property <bool> has-focus: focus-area.has-focus;
+    callback clicked;
+
+    height: Theme.navigation-row-height;
+    border-width: has-focus ? 1px : 0px;
+    border-color: Theme.gold;
+    background: selected ? Theme.maroon : transparent;
+    border-radius: 6px;
+    opacity: enabled ? 1 : 0.46;
+    forward-focus: focus-area;
+
+    accessible-role: button;
+    accessible-enabled: enabled;
+    accessible-label: text;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+
+    focus-area := FocusScope {
+        width: 100%;
+        height: 100%;
+        enabled: root.enabled;
+        TouchArea {
+            width: 100%;
+            height: 100%;
+            enabled: root.enabled;
+            clicked => { focus-area.focus(); root.clicked(); }
+        }
+        key-pressed(event) => {
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    HorizontalLayout {
+        spacing: 10px;
+        padding-left: 11px;
+        padding-right: Theme.space-2;
+
+        VerticalLayout {
+            alignment: center;
+            Image {
+                source: root.icon;
+                width: 16px;
+                height: 16px;
+                colorize: Theme.muted;
+                accessible-role: none;
+            }
+        }
+
+        Text {
+            text: root.text;
+            color: root.selected ? Theme.text : Theme.muted;
+            font-family: Theme.font-family;
+            font-size: 13px;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+}
+
+export component ValueField inherits Rectangle {
+    in property <string> text;
+    in property <bool> output: false;
+    in property <image> source-icon;
+    in property <bool> enabled: true;
+    callback choose;
+
+    height: 28px;
+    background: output ? #332A19 : Theme.field;
+    border-color: has-focus ? Theme.gold : (output ? Theme.amber : Theme.border);
+    border-width: 1px;
+    border-radius: 3px;
+    opacity: enabled ? 1 : 0.58;
+    out property <bool> has-focus: focus-area.has-focus;
+    forward-focus: focus-area;
+
+    focus-area := FocusScope {
+        width: 100%;
+        height: 100%;
+        enabled: root.enabled;
+        accessible-role: button;
+        accessible-enabled: root.enabled;
+        accessible-label: root.text;
+        accessible-action-default => { if (root.enabled) { root.choose(); } }
+        TouchArea {
+            width: 100%;
+            height: 100%;
+            enabled: root.enabled;
+            clicked => { focus-area.focus(); root.choose(); }
+        }
+        key-pressed(event) => {
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.choose();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    HorizontalLayout {
+        spacing: Theme.space-2;
+        padding-left: Theme.space-3;
+        padding-right: Theme.space-3;
+
+        if root.output && root.source-icon.width > 0 && root.source-icon.height > 0: VerticalLayout {
+            alignment: center;
+            Image { source: root.source-icon; width: 16px; height: 16px; colorize: Theme.gold; accessible-role: none; }
+        }
+
+        if !root.output: Text {
+            text: root.text;
+            color: Theme.text;
+            font-family: Theme.font-family;
+            font-size: Theme.body-font-size;
+            vertical-alignment: center;
+            overflow: elide;
+            accessible-role: none;
+        }
+
+        if root.output: Text {
+            text: root.text;
+            color: Theme.gold;
+            font-family: Theme.font-family;
+            font-size: Theme.body-font-size;
+            vertical-alignment: center;
+            overflow: elide;
+            accessible-role: AccessibleRole.text;
+            accessible-label: root.text;
+        }
+    }
+
+}
+
+export component SettingsRow inherits Rectangle {
+    in property <string> label;
+    in property <bool> separator: true;
+    height: 48px;
+    background: Theme.side;
+    HorizontalLayout {
+        padding-left: Theme.space-4;
+        padding-right: Theme.space-4;
+        spacing: Theme.space-4;
+        Text { text: root.label; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; }
+        VerticalLayout {
+            width: 48.6%;
+            padding-top: Theme.space-2;
+            padding-bottom: Theme.space-2;
+            @children
+        }
+    }
+    if root.separator: Rectangle { x: Theme.space-4; y: parent.height - 1px; width: parent.width - 2 * Theme.space-4; height: 1px; background: Theme.border; }
+}

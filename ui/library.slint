@@ -1,0 +1,234 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { AppButton, IconButton } from "controls.slint";
+
+export struct AutomationRow { enabled: bool, id: string, title: string, revision: int, has-steps: bool, error: string, trigger-summary: string, step-count: int, icon-kind: int }
+
+export component WorkflowLibrary inherits Rectangle {
+    in property <[AutomationRow]> automations;
+    in-out property <string> selected-automation;
+    in-out property <bool> create-visible;
+    in-out property <string> create-name;
+    in property <bool> create-pending;
+    in-out property <string> create-error;
+    in property <bool> loading;
+    private property <bool> search-visible: false;
+    private property <string> search-query;
+    private property <[AutomationRow]> filtered-automations: root.search-query == "" ? root.automations : root.filter-automations(root.automations, root.search-query);
+    callback open(string);
+    pure callback filter-automations([AutomationRow], string) -> [AutomationRow];
+    callback create(string);
+    callback cancel-create;
+    background: Theme.ink;
+
+    VerticalLayout {
+        spacing: 0px;
+        HorizontalLayout {
+            height: Theme.toolbar-height;
+            padding-left: Theme.space-6;
+            padding-right: Theme.inspector-width + Theme.space-6;
+            padding-top: 12px;
+            padding-bottom: 12px;
+            spacing: Theme.space-2;
+            if !root.search-visible: Text { text: "Automations"; color: Theme.text; font-size: 18px; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
+            if root.search-visible: Rectangle {
+                height: 32px;
+                horizontal-stretch: 1;
+                background: Theme.field;
+                border-width: 1px;
+                border-color: search-edit.has-focus ? Theme.gold : Theme.border;
+                border-radius: 6px;
+                search-edit := TextInput {
+                    x: 10px;
+                    y: (parent.height - self.height) / 2;
+                    width: parent.width - 20px;
+                    height: 22px;
+                    text <=> root.search-query;
+                    accessible-label: "Search automations";
+                    color: Theme.text;
+                    selection-background-color: Theme.blood;
+                    selection-foreground-color: Theme.text;
+                    single-line: true;
+                    key-pressed(event) => {
+                        if event.text == Key.Escape {
+                            root.search-query = "";
+                            root.search-visible = false;
+                            return accept;
+                        }
+                        return reject;
+                    }
+                }
+            }
+            IconButton {
+                icon: root.search-visible ? @image-url("../assets/icons/x.svg") : @image-url("../assets/icons/search.svg");
+                accessible-label: root.search-visible ? "Close automation search" : "Search automations";
+                clicked => {
+                    if root.search-visible {
+                        root.search-query = "";
+                        root.search-visible = false;
+                    } else {
+                        root.search-visible = true;
+                    }
+                }
+            }
+            IconButton {
+                icon: @image-url("../assets/icons/plus.svg");
+                accessible-label: "Create automation";
+                enabled: !root.create-pending;
+                clicked => { root.create-name = ""; root.create-visible = true; name-edit.focus(); }
+            }
+        }
+        ScrollView {
+            VerticalLayout {
+                padding-left: Theme.space-6;
+                padding-right: Theme.space-6;
+                padding-top: Theme.space-6 + Theme.space-2;
+                padding-bottom: Theme.space-6;
+                spacing: Theme.space-6;
+                alignment: start;
+                Text { text: "All automations"; color: Theme.muted; font-size: 13px; height: 16px; }
+                if root.automations.length == 0: Text {
+                    text: "No automations yet. Use + to create one.";
+                    color: Theme.muted;
+                    font-size: 13px;
+                }
+                if root.automations.length > 0 && root.filtered-automations.length == 0: Text {
+                    text: "No automations match your search.";
+                    color: Theme.muted;
+                    font-size: 13px;
+                }
+                GridLayout {
+                    spacing: Theme.space-3;
+                    for item[index] in root.filtered-automations: Rectangle {
+                        row: index / (root.width < 1120px ? 2 : 3);
+                        col: Math.mod(index, root.width < 1120px ? 2 : 3);
+                        width: 336px;
+                        height: 144px;
+                        background: Theme.surface;
+                        border-radius: 10px;
+                        border-width: 1px;
+                        border-color: card-focus.has-focus ? Theme.amber : Theme.border;
+                        accessible-role: button;
+                        accessible-enabled: item.revision > 0 && !root.loading;
+                        accessible-label: "Open " + item.title;
+                        accessible-action-default => {
+                            if item.revision > 0 && !root.loading {
+                                root.selected-automation = item.id;
+                                root.open(item.id);
+                            }
+                        }
+                        forward-focus: card-focus;
+                        card-focus := FocusScope {
+                            enabled: item.revision > 0 && !root.loading;
+                            TouchArea { clicked => { if item.revision > 0 && !root.loading { card-focus.focus(); root.selected-automation = item.id; root.open(item.id); } } }
+                            key-pressed(event) => {
+                                if event.text == Key.Return || event.text == Key.Space {
+                                    root.selected-automation = item.id;
+                                    root.open(item.id);
+                                    return accept;
+                                }
+                                return reject;
+                            }
+                        }
+                        Image {
+                            source: item.icon-kind == 0 ? @image-url("../assets/icons/message-circle.svg") : item.icon-kind == 1 ? @image-url("../assets/icons/radio.svg") : @image-url("../assets/icons/zap.svg");
+                            colorize: Theme.gold;
+                            x: 16px;
+                            y: 16px;
+                            width: 24px;
+                            height: 24px;
+                            accessible-role: none;
+                        }
+                        Text {
+                            x: 16px;
+                            y: 56px;
+                            width: parent.width - 32px;
+                            height: 22px;
+                            text: item.title;
+                            color: Theme.text;
+                            font-size: 17px;
+                            font-weight: 600;
+                            overflow: elide;
+                            accessible-role: none;
+                        }
+                        Text {
+                            x: 16px;
+                            y: 96px;
+                            width: parent.width - 32px;
+                            height: 18px;
+                            text: item.error != "" ? "Needs attention" : !item.enabled ? "Disabled" : item.step-count == 0 ? "No steps yet" : item.trigger-summary + " · " + item.step-count + (item.step-count == 1 ? " step" : " steps");
+                            color: item.error == "" ? Theme.muted : Theme.gold;
+                            font-size: 12px;
+                            overflow: elide;
+                            accessible-role: none;
+                        }
+                    }
+                }
+                if root.loading: Text { text: "Opening automation…"; color: Theme.muted; }
+                Rectangle { vertical-stretch: 1; }
+            }
+        }
+    }
+
+    Rectangle {
+        visible: root.create-visible;
+        background: #B00B0808;
+        TouchArea { }
+        Rectangle {
+            width: min(parent.width - 48px, 400px);
+            height: min(parent.height - 48px, root.create-error == "" ? 204px : 280px);
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: Theme.side;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: 8px;
+            VerticalLayout {
+                padding: Theme.space-6;
+                spacing: Theme.space-3;
+                Text { text: "New automation"; color: Theme.text; font-size: 18px; font-weight: 600; }
+                Text { text: "Name"; color: Theme.muted; font-size: 13px; }
+                Rectangle {
+                    height: 32px;
+                    background: Theme.field;
+                    border-width: 1px;
+                    border-color: name-edit.has-focus ? Theme.gold : Theme.border;
+                    border-radius: 4px;
+                    name-edit := TextInput {
+                        x: 10px;
+                        y: (parent.height - self.height) / 2;
+                        width: parent.width - 20px;
+                        height: 22px;
+                        text <=> root.create-name;
+                        accessible-label: "Automation name";
+                        color: Theme.text;
+                        selection-background-color: Theme.blood;
+                        selection-foreground-color: Theme.text;
+                        enabled: !root.create-pending;
+                        single-line: true;
+                        edited => { root.create-error = ""; }
+                        key-pressed(event) => {
+                            if event.text == Key.Return {
+                                root.create(root.create-name);
+                                return accept;
+                            }
+                            if event.text == Key.Escape {
+                                root.cancel-create();
+                                return accept;
+                            }
+                            return reject;
+                        }
+                    }
+                }
+                if root.create-error != "": Text { text: root.create-error; color: Theme.gold; wrap: word-wrap; }
+                Rectangle { vertical-stretch: 1; }
+                HorizontalLayout {
+                    spacing: Theme.space-2;
+                    Rectangle { horizontal-stretch: 1; }
+                    AppButton { text: "Cancel"; enabled: !root.create-pending; clicked => { root.cancel-create(); } }
+                    AppButton { text: "Create"; primary: true; enabled: !root.create-pending; clicked => { root.create(root.create-name); } }
+                }
+            }
+        }
+    }
+}

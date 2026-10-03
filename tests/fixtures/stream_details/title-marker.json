@@ -1,0 +1,55 @@
+{
+  "workflow": {
+    "id": "title-marker",
+    "revision": 1,
+    "overlap": true,
+    "steps": [
+      {
+        "id": "chapter",
+        "on_failure": "Stop",
+        "kind": {
+          "Action": {
+            "capability": "obs.create_record_chapter",
+            "version": 1,
+            "inputs": {
+              "name": {
+                "Text": [
+                  {
+                    "Literal": "TITLE CHANGE: "
+                  },
+                  {
+                    "Value": {
+                      "Variable": {
+                        "name": "customTitle",
+                        "fallback": {
+                          "Trigger": {
+                            "name": "customTitle",
+                            "fallback": {
+                              "Literal": "Test Title"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "deadline_ms": null
+          }
+        }
+      }
+    ],
+    "outputs": {}
+  },
+  "triggers": [
+    {
+      "id": "manual",
+      "enabled": true,
+      "kind": {
+        "kind": "manual"
+      }
+    }
+  ],
+  "name": "TitleChangeMarker"
+}

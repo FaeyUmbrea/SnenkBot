@@ -1,0 +1,1316 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { IconButton, AppButton, AppCheckBox, AppTextField, ValueField } from "controls.slint";
+
+export struct ValueSegment { text: string, is-output: bool, is-operator: bool, source-icon: image }
+export enum StepIcon { automation, message, broadcast, control }
+export enum EditorFieldKind { text, integer, toggle, secret }
+export struct WorkflowStep { id: string, label: string, display-label: string, detail: string, icon: StepIcon, value: [ValueSegment], condition: [ValueSegment], suffix: string, control-kind: string, depth: int, group-end: bool, branch-header: bool, branch-empty: bool, parent-id: string, draft-child: bool }
+export struct EditorField { id: string, label: string, description: string, value: string, kind: EditorFieldKind, editable: bool, is-output: bool, configured: bool, optional: bool, has-choices: bool }
+export struct ActionChoice { capability: string, version: int, title: string, icon: StepIcon, group: string }
+export struct ActionDraftField { id: string, label: string, description: string, value: string, kind: EditorFieldKind, required: bool, configured: bool, has-choices: bool }
+export struct ResourceChoice { value: string, label: string, detail: string }
+export struct ValueChoice { source: string, source-id: string, output-id: string, label: string, detail: string, optional: bool, fallback-kind: string }
+export struct ControlChild { kind: string, title: string, removable: bool }
+export struct ControlChoice { kind: string, title: string }
+export struct ControlField { id: string, label: string, value: string, display-value: string, kind: EditorFieldKind, choices: [ControlChoice], editable: bool }
+export struct TriggerChoice { kind: string, title: string, icon: StepIcon }
+
+
+component ControlSelect inherits Rectangle {
+    in property <[ControlChoice]> choices;
+    in property <string> value;
+    in property <string> display-value;
+    in property <string> label;
+    in property <bool> enabled: true;
+    callback chosen(string);
+    height: 36px;
+    background: Theme.field;
+    border-radius: 4px;
+    border-width: 1px;
+    border-color: focus.has-focus ? Theme.gold : Theme.border;
+    accessible-role: button;
+    accessible-label: root.label + ": " + root.display-value;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { menu.show(); } }
+    forward-focus: focus;
+    focus := FocusScope {
+        enabled: root.enabled;
+        TouchArea { enabled: root.enabled; clicked => { focus.focus(); menu.show(); } }
+        key-pressed(event) => { if event.text == Key.Return || event.text == Key.Space { menu.show(); return accept; } return reject; }
+    }
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        Text { text: root.display-value; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+        VerticalLayout { alignment: center; Image { source: @image-url("../assets/icons/chevron-down.svg"); colorize: Theme.text; width: 16px; height: 16px; } }
+    }
+    menu := PopupWindow {
+        x: 0px;
+        y: root.height;
+        width: root.width;
+        height: min(280px, root.choices.length * 38px + 16px);
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.border;
+            border-radius: 6px;
+            ScrollView {
+                horizontal-scrollbar-policy: always-off;
+                VerticalLayout {
+                    padding: 8px;
+                    spacing: 6px;
+                    for choice in root.choices: AppButton {
+                        text: choice.title;
+                        accessible-label: root.label + ": " + choice.title;
+                        clicked => { menu.close(); root.chosen(choice.kind); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+component TriggerChoiceRow inherits Rectangle {
+    in property <TriggerChoice> trigger;
+    callback choose(string);
+    height: 40px;
+    background: Theme.surface;
+    border-radius: 6px;
+    border-width: focus.has-focus ? 1px : 0px;
+    border-color: Theme.gold;
+    accessible-role: button;
+    accessible-label: "Add " + trigger.title;
+    accessible-action-default => { root.choose(root.trigger.kind); }
+    forward-focus: focus;
+    focus := FocusScope {
+        TouchArea { clicked => { focus.focus(); root.choose(root.trigger.kind); } }
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == Key.Space {
+                root.choose(root.trigger.kind);
+                return accept;
+            }
+            return reject;
+        }
+    }
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 12px;
+        VerticalLayout { alignment: center; Image {
+            source: root.trigger.icon == StepIcon.broadcast ? @image-url("../assets/icons/monitor.svg") : @image-url("../assets/icons/zap.svg");
+            colorize: Theme.text;
+            width: 18px;
+            height: 18px;
+        } }
+        Text { text: root.trigger.title; color: Theme.text; font-size: 13px; vertical-alignment: center; overflow: elide; }
+        Rectangle { horizontal-stretch: 1; }
+    }
+}
+
+component ActionChoiceRow inherits Rectangle {
+    in property <ActionChoice> action;
+    in property <bool> compound: false;
+    in property <bool> enabled: true;
+    callback choose(string, int);
+    height: 32px;
+    background: Theme.surface;
+    border-radius: 6px;
+    border-width: focus.has-focus ? 1px : 0px;
+    border-color: Theme.gold;
+    opacity: root.enabled ? 1 : 0.46;
+    accessible-role: button;
+    accessible-label: "Add " + action.title;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.choose(root.action.capability, root.action.version); } }
+    forward-focus: focus;
+    focus := FocusScope {
+        enabled: root.enabled;
+        TouchArea { enabled: root.enabled; clicked => { focus.focus(); root.choose(root.action.capability, root.action.version); } }
+        key-pressed(event) => {
+            if root.enabled && (event.text == Key.Return || event.text == Key.Space) {
+                root.choose(root.action.capability, root.action.version);
+                return accept;
+            }
+            return reject;
+        }
+    }
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 12px;
+        alignment: start;
+        VerticalLayout { alignment: center; Image {
+            source: root.compound ? @image-url("../assets/icons/git-branch.svg") :
+                root.action.group == "Lua" ? @image-url("../assets/icons/code.svg") :
+                root.action.group == "VTube Studio" ? @image-url("../assets/icons/cable.svg") :
+                root.action.icon == StepIcon.message ? @image-url("../assets/icons/message-circle.svg") :
+                root.action.icon == StepIcon.broadcast ? @image-url("../assets/icons/monitor.svg") :
+                root.action.icon == StepIcon.control ? @image-url("../assets/icons/keyboard.svg") :
+                @image-url("../assets/icons/zap.svg");
+            colorize: Theme.text;
+            width: 16px;
+            height: 16px;
+        } }
+        Text { text: root.action.title; color: Theme.text; font-size: 13px; vertical-alignment: center; overflow: elide; }
+    }
+}
+
+component ActionCategory inherits Rectangle {
+    in property <string> title;
+    in property <image> icon;
+    in property <bool> selected: false;
+    in property <bool> enabled: true;
+    in property <length> left-inset: 10px;
+    callback choose;
+    height: 32px;
+    background: root.selected ? Theme.border : transparent;
+    border-radius: 5px;
+    border-width: focus.has-focus ? 1px : 0px;
+    border-color: Theme.gold;
+    accessible-role: button;
+    accessible-enabled: root.enabled;
+    accessible-label: "Show " + root.title + " actions";
+    accessible-action-default => { if root.enabled { root.choose(); } }
+    forward-focus: focus;
+    focus := FocusScope {
+        enabled: root.enabled;
+        TouchArea { enabled: root.enabled; clicked => { focus.focus(); root.choose(); } }
+        key-pressed(event) => {
+            if root.enabled && (event.text == Key.Return || event.text == Key.Space) {
+                root.choose();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    HorizontalLayout {
+        padding-left: root.left-inset;
+        spacing: 8px;
+        VerticalLayout { alignment: center; Image { source: root.icon; colorize: root.selected ? Theme.text : Theme.muted; width: 16px; height: 16px; } }
+        Text { text: root.title; color: root.selected ? Theme.text : Theme.muted; font-size: 13px; vertical-alignment: center; overflow: elide; }
+    }
+}
+
+component WorkflowSwitch inherits Rectangle {
+    in property <bool> checked;
+    in property <bool> enabled: true;
+    callback toggled;
+    width: 44px;
+    height: 24px;
+    background: root.checked ? Theme.blood : Theme.field;
+    border-radius: 12px;
+    border-width: focus.has-focus ? 1px : 0px;
+    border-color: Theme.gold;
+    opacity: root.enabled ? 1 : 0.46;
+    accessible-role: button;
+    accessible-label: root.checked ? "Disable workflow" : "Enable workflow";
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.toggled(); } }
+    forward-focus: focus;
+    focus := FocusScope {
+        enabled: root.enabled;
+        TouchArea { enabled: root.enabled; clicked => { focus.focus(); root.toggled(); } }
+        key-pressed(event) => {
+            if root.enabled && (event.text == Key.Return || event.text == Key.Space) {
+                root.toggled();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    Rectangle {
+        x: root.checked ? parent.width - 21px : 3px;
+        y: 3px;
+        width: 18px;
+        height: 18px;
+        background: Theme.text;
+        border-radius: 9px;
+        accessible-role: none;
+    }
+}
+
+export component StepRow inherits Rectangle {
+    in property <bool> trigger: false;
+    in property <WorkflowStep> step;
+    in property <bool> selected;
+    in property <bool> enabled: true;
+    callback activate(string);
+    in property <bool> can-edit;
+    in property <bool> draft-active;
+    callback discard-draft(string);
+    callback remove(string);
+    callback move(string, int);
+    height: root.trigger ? 72px : root.step.condition.length > 0 ? 60px : 56px;
+    background: root.step.control-kind == "if" || root.step.control-kind == "while" || root.step.control-kind == "one_or_more" ? Theme.side : Theme.surface;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: selected || focus.has-focus ? Theme.amber : transparent;
+    accessible-role: button;
+    accessible-enabled: enabled;
+    accessible-label: step.label;
+    accessible-action-default => { if root.enabled { root.activate(root.step.id); } }
+    forward-focus: focus;
+
+    focus := FocusScope {
+        enabled: root.enabled;
+        TouchArea { enabled: root.enabled; clicked => { focus.focus(); root.activate(root.step.id); } }
+        key-pressed(event) => {
+            if root.enabled && (event.text == Key.Return || event.text == Key.Space) {
+                root.activate(root.step.id);
+                return accept;
+            }
+            return reject;
+        }
+    }
+    HorizontalLayout {
+        y: 0px;
+        width: root.width;
+        height: root.trigger ? 48px : parent.height;
+        padding-left: 14px;
+        padding-right: (root.can-edit || (root.draft-active && root.step.draft-child)) && !root.trigger ? 64px : 16px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        spacing: 8px;
+        if root.trigger || root.step.control-kind != "" || root.step.icon != StepIcon.automation: VerticalLayout { alignment: center; Image {
+            source: root.step.control-kind == "if" || root.step.control-kind == "while" || root.step.control-kind == "one_or_more" ? @image-url("../assets/icons/git-branch.svg") : root.step.control-kind != "" ? @image-url("../assets/icons/zap.svg") : root.step.icon == StepIcon.message ? @image-url("../assets/icons/message-circle.svg") :
+                root.step.icon == StepIcon.broadcast ? @image-url("../assets/icons/monitor.svg") :
+                root.step.icon == StepIcon.control ? @image-url("../assets/icons/keyboard.svg") :
+                @image-url("../assets/icons/zap.svg");
+            colorize: Theme.amber;
+            width: 18px;
+            height: 18px;
+        } }
+        Text { text: root.step.display-label != "" ? root.step.display-label : root.step.label; color: Theme.text; font-size: 14px; font-weight: root.step.control-kind == "if" || root.step.control-kind == "while" || root.step.control-kind == "one_or_more" ? 600 : 400; vertical-alignment: center; horizontal-stretch: 0; overflow: clip; max-width: root.step.condition.length > 0 ? 96px : root.width < 640px ? 170px : 320px; }
+        if root.step.condition.length > 0: VerticalLayout { alignment: center; HorizontalLayout {
+            height: 26px;
+            spacing: 5px;
+            for segment in root.step.condition: Rectangle {
+                height: 26px;
+                background: segment.is-operator ? transparent : segment.is-output ? #332A19 : Theme.field;
+                border-width: segment.is-operator ? 0px : 1px;
+                border-color: segment.is-output ? Theme.amber : Theme.border;
+                border-radius: 4px;
+                HorizontalLayout {
+                    spacing: 4px;
+                    padding-left: segment.is-operator ? 0px : 7px;
+                    padding-right: segment.is-operator ? 0px : 7px;
+                    if segment.is-output: VerticalLayout { alignment: center; Image { source: @image-url("../assets/icons/zap.svg"); colorize: Theme.gold; width: 13px; height: 13px; } }
+                    Text { text: segment.text; color: segment.is-output ? Theme.gold : Theme.text; font-size: 13px; vertical-alignment: center; overflow: elide; max-width: 150px; }
+                }
+            }
+        } }
+        if root.step.value.length > 0: VerticalLayout { alignment: center; HorizontalLayout {
+            height: 26px;
+            spacing: 5px;
+            for segment in root.step.value: Rectangle {
+                height: 26px;
+                background: segment.is-output ? #332A19 : Theme.field;
+                border-width: 1px;
+                border-color: segment.is-output ? Theme.amber : Theme.border;
+                border-radius: 4px;
+            HorizontalLayout {
+                    spacing: 4px;
+                    padding-left: 7px;
+                    padding-right: 7px;
+                    if segment.is-output: VerticalLayout { alignment: center; Image { source: @image-url("../assets/icons/zap.svg"); colorize: Theme.gold; width: 13px; height: 13px; } }
+                    Text { text: segment.text; color: segment.is-output ? Theme.gold : Theme.text; font-size: 13px; vertical-alignment: center; overflow: elide; max-width: root.width < 640px ? 110px : 180px; }
+                }
+            }
+        } }
+        if root.step.suffix != "": Text { text: root.step.suffix; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+        Rectangle { horizontal-stretch: 1; }
+    }
+    if root.draft-active && root.step.draft-child: IconButton {
+        x: root.width - 48px;
+        y: (root.height - self.height) / 2;
+        icon: @image-url("../assets/icons/x.svg");
+        accessible-label: "Remove staged " + root.step.label;
+        clicked => { root.discard-draft(root.step.id); }
+    }
+    if root.can-edit && !root.trigger: IconButton {
+        x: root.width - 40px;
+        y: (root.height - self.height) / 2;
+        icon: @image-url("../assets/icons/ellipsis.svg");
+        accessible-label: "Step options for " + root.step.label;
+        enabled: root.enabled;
+        clicked => { options.show(); }
+    }
+    if root.trigger: Image {
+        x: root.width - 32px;
+        y: 28px;
+        width: 16px;
+        height: 16px;
+        source: @image-url("../assets/icons/chevron-down.svg");
+        colorize: Theme.text;
+        accessible-role: none;
+    }
+    if root.trigger: TouchArea {
+        x: root.width - 40px;
+        y: 16px;
+        width: 40px;
+        height: 40px;
+        enabled: root.enabled;
+        clicked => { focus.focus(); root.activate(root.step.id); }
+    }
+    options := PopupWindow {
+        x: root.width - 184px;
+        y: root.height - 8px;
+        width: 176px;
+        height: 132px;
+        close-policy: close-on-click-outside;
+        Rectangle {
+            background: Theme.surface;
+            border-color: Theme.border;
+            border-width: 1px;
+            border-radius: 6px;
+            VerticalLayout {
+                padding: 8px;
+                spacing: 6px;
+                AppButton { text: "Move up"; icon: @image-url("../assets/icons/chevron-up.svg"); clicked => { options.close(); root.move(root.step.id, -1); } }
+                AppButton { text: "Move down"; icon: @image-url("../assets/icons/chevron-down.svg"); clicked => { options.close(); root.move(root.step.id, 1); } }
+                AppButton { text: "Remove step"; icon: @image-url("../assets/icons/x.svg"); clicked => { options.close(); root.remove(root.step.id); } }
+            }
+        }
+    }
+    if root.trigger && root.step.detail != "": Text {
+        x: 48px;
+        y: 44px;
+        width: parent.width - 64px;
+        height: 16px;
+        text: root.step.detail;
+        color: Theme.muted;
+        font-size: 12px;
+        overflow: elide;
+    }
+}
+
+// The controller supplies definitions and callbacks; this view owns no runtime behavior.
+export component WorkflowEditor inherits Rectangle {
+    in property <bool> workflow-enabled: true;
+    callback set-workflow-enabled(bool);
+    in-out property <bool> choice-visible;
+    in property <bool> choice-loading;
+    in property <string> choice-error;
+    in property <string> choice-title;
+    in property <[ResourceChoice]> choices;
+    callback request-choices(string, bool);
+    callback choose-resource(string);
+    callback cancel-choices;
+    in property <string> workflow-title;
+    in property <string> saved-label;
+    in property <bool> can-run: false;
+    in property <bool> can-add-trigger: false;
+    in property <bool> can-add-action: false;
+    in property <bool> can-rename: false;
+    in property <bool> can-edit-fields: false;
+    in property <bool> can-show-history: true;
+    in property <[WorkflowStep]> triggers;
+    in property <[WorkflowStep]> steps;
+    in property <[EditorField]> inspector-fields;
+    in-out property <string> active-field;
+    in-out property <string> draft-value;
+    in-out property <string> edit-error;
+    in property <bool> edit-pending: false;
+    in property <bool> can-undo: false;
+    in property <bool> can-redo: false;
+    in-out property <string> selected-step;
+    in-out property <int> sidepanel-tab: 0;
+    in-out property <string> action-category: "all";
+    in-out property <bool> rename-active: false;
+    in-out property <string> rename-draft;
+    in-out property <bool> value-visible: false;
+    in-out property <string> value-slot;
+    in-out property <[ValueChoice]> value-choices;
+    in-out property <int> value-selected: -1;
+    in-out property <string> value-fallback-kind;
+    in-out property <string> value-fallback-value;
+    in-out property <string> value-error;
+    callback request-control-values(string);
+    callback request-action-values(string);
+    callback request-action-literal(string);
+    callback request-control-literal(string);
+    callback select-control-value(int);
+    callback set-value-fallback(string, string);
+    callback confirm-control-value();
+    callback cancel-control-values();
+    in-out property <int> control-mode: 0;
+    in property <string> control-kind;
+    in property <string> control-target;
+    in property <string> control-title;
+    in property <string> control-parent-title;
+    in property <[ControlField]> control-fields;
+    in property <string> control-error;
+    in property <[ControlChoice]> control-choices;
+    in property <[ControlChild]> control-children;
+    in property <string> control-insert-parent;
+    in property <string> control-insert-branch;
+    in property <[ControlChoice]> control-input-types;
+    callback begin-control(string);
+    callback edit-control(string);
+    callback update-control-field(string, string);
+    callback save-control();
+    callback cancel-control();
+    callback begin-control-child(string);
+    callback remove-control-child(string);
+    callback add-child(string, string);
+    callback set-control-input-type(string, string);
+    in-out property <int> action-mode: 0;
+    in property <[ActionChoice]> action-choices;
+    in-out property <string> action-query;
+    in property <string> action-title;
+    in property <[ActionDraftField]> action-fields;
+    in-out property <string> action-error;
+    in-out property <int> trigger-mode: 0;
+    in property <[TriggerChoice]> trigger-choices;
+    in-out property <string> trigger-kind;
+    in property <string> trigger-title;
+    in-out property <string> trigger-scene;
+    in-out property <string> trigger-error;
+    in-out property <bool> trigger-editing: false;
+    in-out property <string> trigger-edit-kind;
+    in-out property <string> trigger-edit-scene;
+    in-out property <string> trigger-edit-command;
+    in-out property <string> trigger-edit-aliases;
+    in-out property <bool> trigger-edit-moderator: false;
+    in property <bool> trigger-pending: false;
+    in property <bool> selected-trigger-enabled: false;
+    callback back;
+    callback run;
+    callback history;
+    callback add-trigger;
+    callback add-action;
+    callback select-step(string);
+    callback apply-field(string, string, string);
+    callback remove-field(string, string);
+    callback apply-name(string);
+    callback undo;
+    callback redo;
+    callback search-actions(string);
+    callback choose-action(string, int);
+    callback remove-step(string);
+    callback move-step(string, int);
+    private property <bool> can-switch-detail-context: root.control-mode == 0 && root.action-mode == 0 && root.trigger-mode == 0 && !root.trigger-editing && root.active-field == "" && !root.rename-active && !root.choice-visible && !root.value-visible && !root.edit-pending && !root.trigger-pending;
+    callback update-action-field(int, string, bool);
+    callback save-action;
+    callback cancel-action;
+    callback choose-trigger(string);
+    callback save-trigger;
+    callback cancel-trigger;
+    callback set-trigger-enabled(string, bool);
+    callback edit-trigger(string);
+    callback save-trigger-edit();
+    callback cancel-trigger-edit();
+    background: Theme.ink;
+
+    VerticalLayout {
+        spacing: 0px;
+        HorizontalLayout {
+            height: Theme.toolbar-height;
+            padding-left: 16px;
+            padding-right: Theme.inspector-width + 24px;
+            padding-top: 12px;
+            padding-bottom: 12px;
+            spacing: 16px;
+            IconButton { icon: @image-url("../assets/icons/arrow-left.svg"); accessible-label: !root.value-visible && root.control-parent-title != "" && root.action-mode == 0 ? "Back to " + root.control-parent-title : root.value-visible || root.control-mode != 0 || root.trigger-mode != 0 ? "Back to editor" : root.action-mode == 2 ? "Back to actions" : root.action-mode == 1 ? "Back to editor" : "Back to automations"; enabled: !root.edit-pending && !root.trigger-pending && (root.active-field == "" || root.choice-visible) && !root.rename-active; clicked => { root.back(); } }
+            if !root.rename-active: Text { text: root.workflow-title; color: Theme.text; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+            if !root.rename-active && root.can-rename: IconButton { icon: @image-url("../assets/icons/pencil.svg"); accessible-label: "Rename workflow"; enabled: !root.value-visible && !root.edit-pending && root.control-mode == 0 && root.trigger-mode == 0 && root.action-mode == 0 && root.active-field == ""; clicked => { root.rename-draft = root.workflow-title; root.rename-active = true; } }
+            if root.rename-active: Rectangle {
+                height: 32px;
+                horizontal-stretch: 1;
+                background: Theme.field;
+                border-width: 1px;
+                border-color: name-edit.has-focus ? Theme.gold : Theme.border;
+                border-radius: 4px;
+                name-edit := TextInput {
+                    x: 10px;
+                    y: (parent.height - self.height) / 2;
+                    width: parent.width - 20px;
+                    height: 22px;
+                    text <=> root.rename-draft;
+                    accessible-label: "Workflow name";
+                    color: Theme.text;
+                    selection-background-color: Theme.blood;
+                    selection-foreground-color: Theme.text;
+                    enabled: !root.edit-pending;
+                    single-line: true;
+                }
+            }
+            if root.rename-active: IconButton { icon: @image-url("../assets/icons/x.svg"); accessible-label: "Cancel rename"; enabled: !root.edit-pending; clicked => { root.rename-active = false; root.rename-draft = ""; } }
+            if root.rename-active: IconButton { icon: @image-url("../assets/icons/check.svg"); accessible-label: "Save name"; primary: true; enabled: !root.edit-pending; clicked => { root.apply-name(root.rename-draft); } }
+            if !root.rename-active: Text { text: root.saved-label; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+            if root.can-show-history: IconButton { icon: @image-url("../assets/icons/history.svg"); accessible-label: "Run history"; enabled: !root.value-visible && root.control-mode == 0 && root.trigger-mode == 0 && root.action-mode == 0; clicked => { root.history(); } }
+            if root.can-undo && !root.rename-active: IconButton { icon: @image-url("../assets/icons/undo.svg"); accessible-label: "Undo edit"; enabled: !root.value-visible && root.can-undo && root.control-mode == 0 && root.trigger-mode == 0 && root.action-mode == 0 && !root.edit-pending && root.active-field == ""; clicked => { root.undo(); } }
+            if root.can-redo && !root.rename-active: IconButton { icon: @image-url("../assets/icons/redo.svg"); accessible-label: "Redo edit"; enabled: !root.value-visible && root.can-redo && root.control-mode == 0 && root.trigger-mode == 0 && root.action-mode == 0 && !root.edit-pending && root.active-field == ""; clicked => { root.redo(); } }
+            if !root.rename-active: IconButton { icon: @image-url("../assets/icons/play.svg"); accessible-label: "Run automation"; primary: true; enabled: !root.value-visible && root.can-run && root.control-mode == 0 && root.trigger-mode == 0 && root.action-mode == 0 && !root.edit-pending && root.active-field == ""; clicked => { root.run(); } }
+        }
+        Rectangle { height: 1px; background: Theme.border; }
+        HorizontalLayout {
+            spacing: 0px;
+            VerticalLayout {
+                spacing: 0px;
+                ScrollView {
+                    horizontal-scrollbar-policy: always-off;
+                    VerticalLayout {
+                        padding: Theme.space-6;
+                        spacing: 0px;
+                        alignment: start;
+                        VerticalLayout {
+                            spacing: 8px;
+                            HorizontalLayout {
+                                height: 32px;
+                                spacing: 8px;
+                                Text { text: "Triggers"; color: Theme.muted; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; }
+                                if root.can-add-trigger: IconButton { icon: @image-url("../assets/icons/plus.svg"); accessible-label: "Add trigger"; enabled: !root.value-visible && root.control-mode == 0 && root.trigger-mode == 0 && root.action-mode == 0 && !root.edit-pending && root.active-field == "" && !root.rename-active; clicked => { root.add-trigger(); } }
+                            }
+                            for trigger in root.triggers: StepRow { trigger: true; step: trigger; selected: root.selected-step == trigger.id; enabled: !root.value-visible && root.control-mode == 0 && root.action-mode != 2 && root.trigger-mode != 2; activate(id) => { root.selected-step = id; root.select-step(id); root.sidepanel-tab = 1; root.edit-trigger(id); } }
+                        }
+                        Rectangle { height: 24px; }
+                        Text { text: "Actions"; color: Theme.muted; font-size: 13px; height: 16px; }
+                        Rectangle { height: 16px; }
+                        if root.steps.length == 0: Text { text: "No actions yet"; color: Theme.muted; font-size: 13px; }
+                        VerticalLayout {
+                            spacing: 0px;
+                            for step[index] in root.steps: VerticalLayout {
+                              spacing: 0px;
+                              if index > 0 && step.depth == 0 && !step.group-end && !step.branch-header: Rectangle { height: 12px; }
+                              Rectangle {
+                                height: step.group-end ? 20px : step.branch-header ? 42px : step.condition.length > 0 ? 60px : 56px;
+                                background: step.depth > 0 || step.group-end ? Theme.side : transparent;
+                                border-top-left-radius: step.depth == 0 && !step.group-end ? 8px : 0px;
+                                border-top-right-radius: step.depth == 0 && !step.group-end ? 8px : 0px;
+                                border-bottom-left-radius: step.group-end ? 8px : 0px;
+                                border-bottom-right-radius: step.group-end ? 8px : 0px;
+                                if step.depth > 0: Rectangle {
+                                    x: min(step.depth, 5) * 20px - 9px;
+                                    width: 1px;
+                                    height: parent.height;
+                                    background: Theme.border;
+                                }
+                                if step.branch-header: HorizontalLayout {
+                                    padding-left: min(step.depth, 5) * 20px + 10px;
+                                    padding-right: 18px;
+                                    spacing: 8px;
+                                    Text { text: step.display-label; color: Theme.muted; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+                                    if step.branch-empty: Text { text: "No actions yet"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+                                    Rectangle { horizontal-stretch: 1; }
+                                    AppButton {
+                                        text: "Add action";
+                                        accessible-label: "Add action to " + step.display-label;
+                                        icon: @image-url("../assets/icons/plus.svg");
+                                        enabled: !root.value-visible && root.can-edit-fields && root.can-add-action && (root.control-mode == 0 || (root.control-mode == 1 && root.control-target == step.parent-id)) && root.action-mode == 0 && root.trigger-mode == 0 && !root.edit-pending && root.active-field == "";
+                                        clicked => { if root.control-mode == 1 { root.begin-control-child(step.control-kind); } else { root.add-child(step.parent-id, step.control-kind); } }
+                                    }
+                                }
+                                if !step.group-end && !step.branch-header: StepRow {
+                                  x: min(step.depth, 5) * 20px + (step.depth > 0 ? 8px : 0px);
+                                  width: parent.width - self.x - (step.depth > 0 ? 16px : 0px);
+                                  height: parent.height;
+ draft-active: root.control-mode == 1 && !root.value-visible;
+                                  discard-draft(id) => { root.remove-control-child(id); }
+                                  can-edit: !root.value-visible && root.can-edit-fields && !root.edit-pending && root.active-field == "" && !root.rename-active && root.control-mode == 0 && root.trigger-mode == 0 && root.action-mode == 0; remove(id) => { root.remove-step(id); } move(id, direction) => { root.move-step(id, direction); } step: step; selected: root.selected-step == step.id; enabled: !root.value-visible && root.control-mode == 0 && root.action-mode != 2 && root.trigger-mode != 2; activate(id) => { root.selected-step = id; root.select-step(id); root.sidepanel-tab = 1; }
+                                }
+                                if step.depth > 0 && !step.group-end && !step.branch-header: Rectangle {
+                                    x: min(step.depth, 5) * 20px - 9px;
+                                    y: parent.height / 2;
+                                    width: 17px;
+                                    height: 1px;
+                                    background: Theme.border;
+                                }
+                                if step.group-end: Rectangle {
+                                    x: min(step.depth, 5) * 20px + 10px;
+                                    y: 0px;
+                                    width: parent.width - self.x - 26px;
+                                    height: 1px;
+                                    background: Theme.border;
+                                }
+                              }
+                            }
+                        }
+                        if root.control-mode == 1 && root.control-target == "" && (root.control-kind == "one_or_more" || root.control-kind == "while" || root.control-kind == "if"): Rectangle {
+                            background: Theme.surface;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: Theme.amber;
+                            VerticalLayout {
+                                padding: 16px;
+                                spacing: 12px;
+                                Text { text: root.control-title; color: Theme.text; font-weight: 600; height: 32px; vertical-alignment: center; }
+                                for child in root.control-children: Rectangle {
+                                    height: 48px;
+                                    HorizontalLayout {
+                                        Text { text: child.title; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                                        IconButton { icon: @image-url("../assets/icons/x.svg"); accessible-label: "Remove " + child.title; clicked => { root.remove-control-child(child.kind); } }
+                                    }
+                                    Rectangle { y: parent.height - 1px; width: parent.width; height: 1px; background: Theme.border; }
+                                }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    Rectangle { horizontal-stretch: 1; }
+                                    if root.control-kind != "if": IconButton { icon: @image-url("../assets/icons/plus.svg"); background: Theme.field; accessible-label: "Add action to this group"; clicked => { root.begin-control-child("body"); } }
+                                    if root.control-kind == "if": AppButton { text: "Add to Then"; clicked => { root.begin-control-child("then"); } }
+                                    if root.control-kind == "if": AppButton { text: "Add to Else"; clicked => { root.begin-control-child("else"); } }
+                                    Rectangle { horizontal-stretch: 1; }
+                                }
+                            }
+                        }
+                        Rectangle { height: 24px; }
+                        if root.can-add-action && root.control-mode == 0: AppButton { text: "Add action"; icon: @image-url("../assets/icons/plus.svg"); width: 136px; enabled: !root.value-visible && root.control-mode == 0 && root.action-mode == 0 && root.trigger-mode == 0 && !root.edit-pending && root.active-field == "" && !root.rename-active; clicked => { root.add-action(); } }
+                        Rectangle {
+                            vertical-stretch: 1;
+                            min-height: 24px;
+                            TouchArea {
+                                enabled: root.action-mode != 2 && root.control-mode == 0 && root.trigger-mode != 2 && !root.edit-pending && !root.rename-active;
+                                clicked => { root.selected-step = ""; root.select-step(""); root.sidepanel-tab = 1; }
+                            }
+                        }
+                    }
+                }
+                Rectangle {
+                    height: 36px;
+                    Rectangle { x: 0px; y: 0px; height: 1px; width: parent.width; background: Theme.border; }
+                    HorizontalLayout {
+                        padding-left: 24px;
+                        padding-right: 24px;
+                        Text { text: "Actions run in order"; color: Theme.muted; font-size: 11px; vertical-alignment: center; }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+            }
+            Rectangle {
+                width: Theme.inspector-width;
+                background: Theme.side;
+                Rectangle { x: 0px; y: 0px; width: 1px; height: parent.height; background: Theme.border; }
+                VerticalLayout {
+                    spacing: 0px;
+                Rectangle {
+                    visible: !root.choice-visible && !root.value-visible;
+                    min-height: root.choice-visible || root.value-visible ? 0px : 68px;
+                    max-height: root.choice-visible || root.value-visible ? 0px : 68px;
+                    Rectangle {
+                        x: (parent.width - self.width) / 2;
+                        y: 16px;
+                        width: 80px;
+                        height: 36px;
+                        background: #28201D;
+                        border-radius: 18px;
+                        IconButton {
+                            x: 4px;
+                            y: 2px;
+                            width: 34px;
+                            icon: @image-url("../assets/icons/panels.svg");
+                            background: root.sidepanel-tab == 0 ? #3B2F2A : transparent;
+                            accessible-label: "Actions tab";
+                            clicked => { root.sidepanel-tab = 0; }
+                        }
+                        IconButton {
+                            x: 42px;
+                            y: 2px;
+                            width: 34px;
+                            icon: @image-url("../assets/icons/info.svg");
+                            background: root.sidepanel-tab == 1 ? #3B2F2A : transparent;
+                            accessible-label: "Details tab";
+                            clicked => { root.sidepanel-tab = 1; }
+                        }
+                    }
+                }
+                Rectangle {
+                    visible: !root.choice-visible && !root.value-visible;
+                    min-height: 0px;
+                    max-height: root.choice-visible || root.value-visible ? 0px : 100000px;
+                    vertical-stretch: root.choice-visible || root.value-visible ? 0 : 1;
+                ScrollView {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    height: parent.height;
+                    visible: root.sidepanel-tab == 0;
+                    horizontal-scrollbar-policy: always-off;
+                    VerticalLayout {
+                        padding-left: 24px;
+                        padding-right: 24px;
+                        padding-bottom: 24px;
+                        spacing: 4px;
+                        alignment: start;
+                        Rectangle {
+                            height: 32px;
+                            background: Theme.ink;
+                            border-radius: 4px;
+                            border-width: 1px;
+                            border-color: action-search.has-focus ? Theme.gold : transparent;
+                            Image { source: @image-url("../assets/icons/search.svg"); colorize: Theme.muted; x: 10px; y: 8px; width: 16px; height: 16px; }
+                            if root.action-query == "": Text { x: 34px; y: 7px; text: "Search actions"; color: Theme.muted; font-size: 13px; }
+                            action-search := TextInput {
+                                x: 34px;
+                                y: 5px;
+                                width: parent.width - 44px;
+                                height: 22px;
+                                text <=> root.action-query;
+                                accessible-label: "Search actions";
+                                color: Theme.text;
+                                single-line: true;
+                                edited => { root.search-actions(self.text); }
+                            }
+                        }
+                        Rectangle { height: 4px; }
+                        HorizontalLayout {
+                            spacing: 4px;
+                            ActionCategory { title: "All Actions"; icon: @image-url("../assets/icons/zap.svg"); selected: root.action-category == "all"; width: (Theme.inspector-width - 52px) / 2; choose => { root.action-category = "all"; root.search-actions(root.action-query); } }
+                            ActionCategory { title: "Flow"; icon: @image-url("../assets/icons/git-branch.svg"); selected: root.action-category == "flow"; width: (Theme.inspector-width - 52px) / 2; choose => { root.action-category = "flow"; root.search-actions(root.action-query); } }
+                        }
+                        HorizontalLayout {
+                            spacing: 4px;
+                            ActionCategory { title: "Lua"; icon: @image-url("../assets/icons/code.svg"); selected: root.action-category == "lua"; width: (Theme.inspector-width - 52px) / 2; choose => { root.action-category = "lua"; root.search-actions(root.action-query); } }
+                            ActionCategory { title: "Twitch"; icon: @image-url("../assets/icons/message-circle.svg"); selected: root.action-category == "twitch"; width: (Theme.inspector-width - 52px) / 2; choose => { root.action-category = "twitch"; root.search-actions(root.action-query); } }
+                        }
+                        HorizontalLayout {
+                            spacing: 4px;
+                            ActionCategory { title: "OBS"; icon: @image-url("../assets/icons/monitor.svg"); selected: root.action-category == "obs"; width: (Theme.inspector-width - 52px) / 2; choose => { root.action-category = "obs"; root.search-actions(root.action-query); } }
+                            ActionCategory { title: "VTube Studio"; icon: @image-url("../assets/icons/cable.svg"); selected: root.action-category == "vtube"; width: (Theme.inspector-width - 52px) / 2; choose => { root.action-category = "vtube"; root.search-actions(root.action-query); } }
+                        }
+                        Rectangle { height: 1px; background: Theme.border; }
+                        Rectangle { height: 4px; }
+                        for action[index] in root.action-choices: VerticalLayout {
+                            spacing: 3px;
+                            if index == 0 || action.group != root.action-choices[index - 1].group: Text {
+                                text: action.group;
+                                color: Theme.muted;
+                                font-size: 12px;
+                                height: 27px;
+                                vertical-alignment: center;
+                            }
+                            ActionChoiceRow {
+                                action: action;
+                                enabled: root.can-add-action && root.control-mode == 0 && root.trigger-mode == 0 && root.action-mode != 2 && root.active-field == "" && !root.trigger-editing && !root.edit-pending && !root.rename-active;
+                                choose(capability, version) => { root.action-mode = 1; root.sidepanel-tab = 1; root.choose-action(capability, version); }
+                            }
+                        }
+                        if (root.action-category == "all" || root.action-category == "flow") && root.control-choices.length > 0: Text {
+                            text: "Flow";
+                            color: Theme.muted;
+                            font-size: 12px;
+                            height: 27px;
+                            vertical-alignment: center;
+                        }
+                        if root.action-category == "all" || root.action-category == "flow": VerticalLayout {
+                            spacing: 4px;
+                            for control in root.control-choices: ActionChoiceRow {
+                                action: { capability: control.kind, version: 0, title: control.title, icon: StepIcon.automation, group: "Flow" };
+                                compound: control.kind == "if" || control.kind == "while" || control.kind == "one_or_more";
+                                enabled: root.can-add-action && root.control-mode == 0 && root.trigger-mode == 0 && root.action-mode != 2 && root.active-field == "" && !root.trigger-editing && !root.edit-pending && !root.rename-active;
+                                choose(kind, version) => { root.sidepanel-tab = 1; root.begin-control(kind); }
+                            }
+                        }
+                        if root.action-choices.length == 0 && ((root.action-category != "all" && root.action-category != "flow") || root.control-choices.length == 0): Text { text: "No matching actions"; color: Theme.muted; font-size: 13px; }
+                    }
+                }
+                ScrollView {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    height: parent.height;
+                    visible: root.sidepanel-tab == 1;
+                    VerticalLayout {
+                        padding-left: Theme.space-6;
+                        padding-right: Theme.space-6;
+                        padding-bottom: Theme.space-6;
+                        spacing: Theme.space-2;
+                        alignment: start;
+                        if root.selected-step != "": ActionCategory {
+                            title: "Workflow details";
+                            icon: @image-url("../assets/icons/arrow-left.svg");
+                            accessible-label: "Back to workflow details";
+                            left-inset: 0px;
+                            enabled: root.can-switch-detail-context;
+                            choose => { root.selected-step = ""; root.select-step(""); }
+                        }
+                        if root.selected-step != "": Rectangle { height: 10px; }
+                        if root.selected-step == "" && root.trigger-mode == 0 && root.action-mode == 0 && root.control-mode == 0: VerticalLayout {
+                            spacing: 20px;
+                            Text { text: root.workflow-title; color: Theme.text; font-size: 17px; font-weight: 600; wrap: word-wrap; }
+                            Rectangle {
+                                height: 88px;
+                                background: Theme.surface;
+                                border-radius: 6px;
+                                VerticalLayout {
+                                    padding-left: 16px;
+                                    padding-right: 16px;
+                                    HorizontalLayout {
+                                        height: 44px;
+                                        Text { text: "Enabled"; color: Theme.text; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; }
+                                        WorkflowSwitch {
+                                            checked: root.workflow-enabled;
+                                            enabled: root.can-switch-detail-context;
+                                            toggled => { root.set-workflow-enabled(!root.workflow-enabled); }
+                                        }
+                                    }
+                                    Rectangle { height: 1px; background: Theme.border; }
+                                    HorizontalLayout {
+                                        height: 43px;
+                                        Text { text: root.saved-label; color: Theme.muted; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; }
+                                    }
+                                }
+                            }
+                            AppButton {
+                                text: "Saved versions";
+                                icon: @image-url("../assets/icons/history.svg");
+                                enabled: root.can-show-history && !root.edit-pending;
+                                clicked => { root.history(); }
+                            }
+                        }
+                        if root.action-mode == 1 && root.trigger-mode == 0 && root.control-mode == 0: AppButton {
+                            text: "Browse actions";
+                            icon: @image-url("../assets/icons/arrow-left.svg");
+                            clicked => { root.sidepanel-tab = 0; }
+                        }
+                        if root.trigger-mode == 1: Text { text: "Add trigger"; color: Theme.text; font-size: 17px; font-weight: 600; }
+                        if root.trigger-mode == 1: Text { text: "A trigger starts this automation."; color: Theme.muted; font-size: 12px; }
+                        if root.trigger-mode == 1: Rectangle { height: 20px; }
+                        if root.trigger-mode == 1: VerticalLayout {
+                            spacing: Theme.space-2;
+                            for trigger in root.trigger-choices: TriggerChoiceRow {
+                                trigger: trigger;
+                                choose(kind) => { root.choose-trigger(kind); }
+                            }
+                        }
+                        if root.trigger-mode == 2: Text { text: root.trigger-title; color: Theme.text; font-size: 17px; font-weight: 600; wrap: word-wrap; }
+                        if root.trigger-mode == 2: Text { text: "Configure trigger"; color: Theme.muted; font-size: 12px; }
+                        if root.trigger-mode == 2: VerticalLayout {
+                            spacing: Theme.space-3;
+                            if root.trigger-kind == "obs.current_scene": VerticalLayout {
+                                spacing: Theme.space-2;
+                                Text { text: "Scene name"; color: Theme.text; font-size: 13px; font-weight: 600; }
+                                Text { text: "Starts when OBS switches to this scene."; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                                Rectangle {
+                                    height: 32px;
+                                    background: Theme.field;
+                                    border-width: 1px;
+                                    border-color: trigger-scene-input.has-focus ? Theme.gold : Theme.border;
+                                    border-radius: 4px;
+                                    trigger-scene-input := TextInput {
+                                        x: 10px;
+                                        y: (parent.height - self.height) / 2;
+                                        width: parent.width - 20px;
+                                        height: 22px;
+                                        text <=> root.trigger-scene;
+                                        accessible-label: "Scene name, required";
+                                        color: Theme.text;
+                                        selection-background-color: Theme.blood;
+                                        selection-foreground-color: Theme.text;
+                                        enabled: !root.trigger-pending;
+                                        single-line: true;
+                                    }
+                                }
+                                Text { text: "Required"; color: Theme.muted; font-size: 11px; }
+                            }
+                            if root.trigger-kind == "obs.recording_started": Text { text: "Starts when OBS recording begins."; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+                            if root.trigger-kind == "manual": Text { text: "Run this automation from the play button."; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+                            if root.trigger-error != "": Text { text: root.trigger-error; color: Theme.gold; wrap: word-wrap; }
+                        }
+                        if root.trigger-mode == 0 && root.action-mode == 2: Text { text: root.action-title; color: Theme.text; font-size: 17px; font-weight: 600; wrap: word-wrap; }
+                        if root.trigger-mode == 0 && root.action-mode == 2: Text { text: "Configure action"; color: Theme.muted; font-size: 12px; }
+                        if root.trigger-mode == 0 && root.action-mode == 2: VerticalLayout {
+                          spacing: Theme.space-3;
+                          for field[index] in root.action-fields: VerticalLayout {
+                            spacing: Theme.space-2;
+                            Text { text: field.label; color: Theme.muted; font-size: 13px; }
+                            if field.description != "": Text { text: field.description; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                            if !field.required && !field.configured: AppButton {
+                                text: "Add";
+                                clicked => { root.update-action-field(index, "", true); }
+                            }
+                            if field.configured: HorizontalLayout {
+                                spacing: Theme.space-2;
+                                if field.has-choices: AppButton {
+                                    text: field.value == "" ? "Choose " + field.label : field.value;
+                                    icon: @image-url("../assets/icons/chevron-down.svg");
+                                    accessible-label: "Choose " + field.label;
+                                    horizontal-stretch: 1;
+                                    clicked => { root.request-choices(field.id, true); }
+                                }
+                                if !field.has-choices && field.kind != EditorFieldKind.toggle: Rectangle {
+                                    height: field.id == "message" ? 112px : 36px;
+                                    horizontal-stretch: 1;
+                                    background: Theme.field;
+                                    border-width: 1px;
+                                    border-color: Theme.border;
+                                    border-radius: 4px;
+                                    TextInput {
+                                        x: 10px;
+                                        y: (parent.height - self.height) / 2;
+                                        width: parent.width - 20px;
+                                        height: 22px;
+                                        text: field.value;
+                                        accessible-label: field.label;
+                                        color: Theme.text;
+                                        input-type: field.kind == EditorFieldKind.secret ? password : text;
+                                        key-pressed(event) => {
+                                            if field.kind == EditorFieldKind.secret && event.modifiers.control && (event.text == "c" || event.text == "C" || event.text == "x" || event.text == "X") {
+                                                return accept;
+                                            }
+                                            return reject;
+                                        }
+                                        single-line: true;
+                                        edited => { root.update-action-field(index, self.text, true); }
+                                    }
+                                }
+                                if field.kind == EditorFieldKind.toggle: AppButton {
+                                    text: field.value == "true" ? "On" : "Off";
+                                    clicked => { root.update-action-field(index, field.value == "true" ? "false" : "true", true); }
+                                }
+                                if !field.required: IconButton {
+                                    icon: @image-url("../assets/icons/x.svg");
+                                    accessible-label: "Remove " + field.label;
+                                    clicked => { root.update-action-field(index, "", false); }
+                                }
+                            }
+                          }
+                        }
+                        if root.trigger-mode == 0 && root.action-mode == 2 && root.action-error != "": Text { text: root.action-error; color: Theme.gold; wrap: word-wrap; }
+                        if root.control-mode == 1 && root.action-mode == 0: VerticalLayout {
+                            spacing: 16px;
+                            if root.control-parent-title != "": Text { text: root.control-parent-title + " › " + root.control-title; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                            Text { text: root.control-title; color: Theme.text; font-size: 17px; font-weight: 600; }
+                            if root.control-kind == "one_or_more": Rectangle { height: 12px; }
+                            if root.control-kind == "one_or_more": Text { text: "Try every action. Succeed when at least one succeeds."; color: Theme.muted; wrap: word-wrap; }
+                            if root.control-kind == "one_or_more": Rectangle { height: 24px; }
+                            if root.control-kind == "one_or_more": Text { text: "Actions run in order. All results appear in run history."; color: Theme.muted; wrap: word-wrap; }
+                            for field in root.control-fields: VerticalLayout {
+                                spacing: 8px;
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    Text { text: field.label; color: Theme.muted; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; }
+                                    if field.id == "left" || field.id == "right" || field.id == "value": IconButton {
+                                        icon: @image-url("../assets/icons/zap.svg");
+                                        accessible-label: "Choose value for " + field.label;
+                                        enabled: !root.edit-pending;
+                                        clicked => { root.request-control-values(field.id); }
+                                    }
+                                }
+                                if field.choices.length > 0: ControlSelect {
+                                    choices: field.choices;
+                                    value: field.value;
+                                    display-value: field.display-value;
+                                    label: field.label;
+                                    enabled: field.editable && !root.edit-pending;
+                                    chosen(value) => { root.update-control-field(field.id, value); }
+                                }
+                                if field.choices.length == 0 && field.editable && field.kind != EditorFieldKind.toggle: Rectangle {
+                                    height: 36px;
+                                    background: Theme.field;
+                                    border-radius: 4px;
+                                    border-width: control-edit.has-focus ? 1px : 0px;
+                                    border-color: Theme.gold;
+                                    control-edit := TextInput {
+                                        x: 12px; y: 7px; width: parent.width - 24px; height: 22px;
+                                        text: field.value;
+                                        accessible-label: field.label;
+                                        color: Theme.text;
+                                        enabled: !root.edit-pending;
+                                        edited => { root.update-control-field(field.id, self.text); }
+                                    }
+                                }
+                                if field.choices.length == 0 && field.editable && field.kind == EditorFieldKind.toggle: ControlSelect {
+                                    label: field.label;
+                                    choices: [{kind: "true", title: "True"}, {kind: "false", title: "False"}];
+                                    value: field.value;
+                                    display-value: field.value == "true" ? "True" : "False";
+                                    enabled: !root.edit-pending;
+                                    chosen(value) => { root.update-control-field(field.id, value); }
+                                }
+                                if !field.editable && (field.id == "left" || field.id == "right" || field.id == "value"): AppButton {
+                                    text: "Use literal"; enabled: !root.edit-pending;
+                                    clicked => { root.request-control-literal(field.id); }
+                                }
+                                if !field.editable: ValueField { text: field.display-value; output: true; enabled: false; }
+                            }
+                            if root.control-error != "": Text { text: root.control-error; color: Theme.gold; wrap: word-wrap; }
+                        }
+                        if root.control-mode == 0 && root.trigger-mode == 0 && root.action-mode == 0: VerticalLayout {
+                          spacing: Theme.space-2;
+                          if root.selected-step.starts-with("trigger:"): VerticalLayout {
+                          spacing: 0px;
+                          for trigger in root.triggers: VerticalLayout {
+                            visible: root.selected-step == trigger.id;
+                            min-height: 0px;
+                            max-height: root.selected-step == trigger.id ? 100000px : 0px;
+                            spacing: Theme.space-2;
+                            Text { text: trigger.label; color: Theme.text; font-size: 17px; font-weight: 600; wrap: word-wrap; }
+                            Text { text: trigger.detail; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+                            if root.trigger-editing && root.trigger-edit-kind == "obs.current_scene": VerticalLayout {
+                                spacing: 8px;
+                                Text { text: "Scene name"; color: Theme.muted; font-size: 13px; }
+                                AppTextField { text <=> root.trigger-edit-scene; label: "Scene name"; enabled: !root.trigger-pending; }
+                            }
+                            if root.trigger-editing && root.trigger-edit-kind == "twitch.chat.command": VerticalLayout {
+                                spacing: 8px;
+                                Text { text: "Command"; color: Theme.muted; font-size: 13px; }
+                                AppTextField { text <=> root.trigger-edit-command; label: "Command"; enabled: !root.trigger-pending; }
+                                Text { text: "Aliases (comma separated)"; color: Theme.muted; font-size: 13px; }
+                                AppTextField { text <=> root.trigger-edit-aliases; label: "Aliases"; enabled: !root.trigger-pending; }
+                                AppCheckBox { text: "Broadcaster or moderator only"; checked <=> root.trigger-edit-moderator; enabled: !root.trigger-pending; }
+                            }
+                            if root.trigger-editing && root.trigger-error != "": Text { text: root.trigger-error; color: Theme.gold; wrap: word-wrap; }
+                            AppButton {
+                                text: root.selected-trigger-enabled ? "Disable trigger" : "Enable trigger";
+                                icon: @image-url("../assets/icons/power.svg");
+                                enabled: root.can-edit-fields && !root.edit-pending && !root.trigger-editing;
+                                clicked => { root.set-trigger-enabled(trigger.id, !root.selected-trigger-enabled); }
+                            }
+                        }
+                          }
+                          if !root.selected-step.starts-with("trigger:"): VerticalLayout {
+                          spacing: 0px;
+                          for step in root.steps: VerticalLayout {
+                            visible: !step.group-end && root.selected-step == step.id;
+                            min-height: 0px;
+                            max-height: !step.group-end && root.selected-step == step.id ? 100000px : 0px;
+                            spacing: Theme.space-2;
+                            Text { text: step.label; color: Theme.text; font-size: 17px; font-weight: 600; wrap: word-wrap; }
+                            if root.inspector-fields.length == 0: Text { text: step.detail; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+                            if step.control-kind != "" && root.can-edit-fields: AppButton {
+                                text: "Edit " + step.label;
+                                icon: @image-url("../assets/icons/pencil.svg");
+                                enabled: !root.edit-pending && root.active-field == "";
+                                clicked => { root.edit-control(step.id); }
+                            }
+                            if (step.control-kind == "while" || step.control-kind == "one_or_more") && root.can-edit-fields: AppButton {
+                                text: "Add action";
+                                icon: @image-url("../assets/icons/plus.svg");
+                                enabled: root.can-add-action && !root.edit-pending && root.active-field == "";
+                                clicked => { root.add-child(step.id, "body"); }
+                            }
+                            if step.control-kind == "if" && root.can-edit-fields: HorizontalLayout {
+                                spacing: 8px;
+                                AppButton { text: "Add to Then"; enabled: root.can-add-action && !root.edit-pending && root.active-field == ""; clicked => { root.add-child(step.id, "then"); } }
+                                AppButton { text: "Add to Else"; enabled: root.can-add-action && !root.edit-pending && root.active-field == ""; clicked => { root.add-child(step.id, "else"); } }
+                            }
+
+                        }
+                          }
+                          for field in root.inspector-fields: VerticalLayout {
+                            spacing: Theme.space-2;
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Text { text: field.label; color: Theme.muted; font-size: 13px; vertical-alignment: center; horizontal-stretch: 1; }
+                                if root.can-edit-fields && field.kind != EditorFieldKind.secret: IconButton {
+                                    icon: @image-url("../assets/icons/zap.svg");
+                                    accessible-label: "Choose value for " + field.label;
+                                    enabled: !root.edit-pending && root.active-field == "";
+                                    clicked => { root.request-action-values(field.id); }
+                                }
+                            }
+                            if field.description != "": Text { text: field.description; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                            if root.active-field != field.id: HorizontalLayout {
+                                spacing: Theme.space-2;
+                                ValueField {
+                                    text: field.value;
+                                    output: field.is-output;
+                                    source-icon: @image-url("../assets/icons/zap.svg");
+                                    enabled: root.can-edit-fields && field.editable && field.has-choices && !root.edit-pending && root.active-field == "";
+                                    horizontal-stretch: 1;
+                                    choose => { root.request-choices(field.id, false); }
+                                }
+                                if root.can-edit-fields && field.is-output && field.kind != EditorFieldKind.secret: AppButton {
+                                    text: "Use literal";
+                                    enabled: !root.edit-pending && root.active-field == "";
+                                    clicked => { root.request-action-literal(field.id); }
+                                }
+                                if root.can-edit-fields && field.editable: AppButton {
+                                    text: field.has-choices ? "Choose" : field.configured ? "Edit" : "Add";
+                                    enabled: root.active-field == "" && !root.edit-pending && !root.rename-active;
+                                    clicked => { if field.has-choices { root.request-choices(field.id, false); } else { root.active-field = field.id; root.draft-value = field.configured ? field.value : field.kind == EditorFieldKind.toggle ? "false" : ""; root.edit-error = ""; } }
+                                }
+                                if root.can-edit-fields && field.editable && field.configured && field.optional: IconButton {
+                                    icon: @image-url("../assets/icons/x.svg");
+                                    accessible-label: "Remove " + field.label;
+                                    enabled: root.active-field == "" && !root.edit-pending && !root.rename-active;
+                                    clicked => { root.remove-field(root.selected-step, field.id); }
+                                }
+                            }
+                            if root.active-field == field.id: VerticalLayout {
+                                spacing: Theme.space-2;
+                                if field.has-choices: AppButton { text: root.draft-value; icon: @image-url("../assets/icons/chevron-down.svg"); enabled: !root.edit-pending; clicked => { root.request-choices(field.id, false); } }
+                                if field.kind != EditorFieldKind.toggle && !field.has-choices: Rectangle {
+                                    height: field.id == "message" ? 112px : 36px;
+                                    background: Theme.field;
+                                    border-width: 1px;
+                                    border-color: edit.has-focus ? Theme.gold : Theme.border;
+                                    border-radius: 4px;
+                                    edit := TextInput {
+                                        x: 10px;
+                                        y: (parent.height - self.height) / 2;
+                                        width: parent.width - 20px;
+                                        height: parent.height - 16px;
+                                        text <=> root.draft-value;
+                                        accessible-label: field.label;
+                                        color: Theme.text;
+                                        selection-background-color: Theme.blood;
+                                        selection-foreground-color: Theme.text;
+                                        enabled: !root.edit-pending;
+                                        single-line: field.id != "message";
+                                        wrap: word-wrap;
+                                    }
+                                }
+                                if field.kind == EditorFieldKind.toggle: AppButton {
+                                    text: root.draft-value == "true" ? "On" : "Off";
+                                    enabled: !root.edit-pending;
+                                    clicked => { root.draft-value = root.draft-value == "true" ? "false" : "true"; }
+                                }
+                                if root.edit-error != "": Text { text: root.edit-error; color: Theme.gold; wrap: word-wrap; }
+
+                            }
+                        }
+                          }
+                        Rectangle { height: 24px; }
+                        @children
+                    }
+                }
+                }
+                if root.value-visible: ScrollView {
+                    horizontal-scrollbar-policy: always-off;
+                    VerticalLayout {
+                        padding: 24px;
+                        spacing: 12px;
+                        alignment: start;
+                        Text { text: "Choose a value"; color: Theme.text; font-size: 17px; font-weight: 600; }
+                        if root.value-choices.length == 0: Text { text: "No values are available before this step."; color: Theme.muted; wrap: word-wrap; }
+                        for choice[index] in root.value-choices: VerticalLayout {
+                            spacing: 4px;
+                            AppButton {
+                                text: choice.label;
+                                primary: index == root.value-selected;
+                                clicked => { root.select-control-value(index); }
+                            }
+                            Text { text: choice.detail; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+                            if choice.optional: Text { text: "May be unavailable · fallback required"; color: Theme.amber; font-size: 12px; }
+                        }
+                        if root.value-selected >= 0 && root.value-choices[root.value-selected].optional: VerticalLayout {
+                            spacing: 8px;
+                            Text { text: "Use this when the value is unavailable"; color: Theme.text; font-size: 13px; wrap: word-wrap; }
+                            ControlSelect {
+                                label: "Fallback type";
+                                choices: root.control-input-types;
+                                value: root.value-fallback-kind;
+                                display-value: root.value-fallback-kind == "number" ? "Number" : root.value-fallback-kind == "toggle" ? "On or Off" : root.value-fallback-kind == "text" ? "Text" : "Choose type";
+                                chosen(kind) => { root.set-value-fallback(kind, root.value-fallback-value); }
+                            }
+                            if root.value-fallback-kind != "toggle": Rectangle {
+                                height: 36px; background: Theme.field; border-radius: 4px;
+                                fallback-edit := TextInput {
+                                    x: 12px; y: 7px; width: parent.width - 24px; height: 22px;
+                                    text <=> root.value-fallback-value;
+                                    color: Theme.text;
+                                    accessible-label: "Fallback value";
+                                    edited => { root.set-value-fallback(root.value-fallback-kind, self.text); }
+                                }
+                            }
+                            if root.value-fallback-kind == "toggle": ControlSelect {
+                                label: "Fallback value";
+                                choices: [{kind: "true", title: "True"}, {kind: "false", title: "False"}];
+                                value: root.value-fallback-value;
+                                display-value: root.value-fallback-value == "true" ? "True" : root.value-fallback-value == "false" ? "False" : "Choose a value";
+                                chosen(value) => { root.set-value-fallback("toggle", value); }
+                            }
+                        }
+                        if root.value-error != "": Text { text: root.value-error; color: Theme.gold; wrap: word-wrap; }
+                    }
+                }
+                if root.value-visible: Rectangle {
+                    height: 64px;
+                    HorizontalLayout {
+                        padding: 16px; spacing: 8px;
+                        Rectangle { horizontal-stretch: 1; }
+                        AppButton { text: "Cancel"; width: 88px; clicked => { root.cancel-control-values(); } }
+                        AppButton { text: "Done"; width: 88px; primary: true; enabled: root.value-selected >= 0; clicked => { root.confirm-control-value(); } }
+                    }
+                }
+                if root.choice-visible: ScrollView {
+                    horizontal-scrollbar-policy: always-off;
+                    VerticalLayout {
+                        padding: 24px;
+                        spacing: 12px;
+                        alignment: start;
+                        Text { text: root.choice-title; color: Theme.text; font-size: 17px; font-weight: 600; wrap: word-wrap; }
+                        if root.choice-loading: Text { text: "Loading…"; color: Theme.muted; }
+                        if root.choice-error != "": Text { text: root.choice-error; color: Theme.gold; wrap: word-wrap; }
+                        if !root.choice-loading && root.choice-error == "" && root.choices.length == 0: Text { text: "No resources are available."; color: Theme.muted; wrap: word-wrap; }
+                        for choice in root.choices: AppButton {
+                            text: choice.label;
+                            accessible-label: "Choose " + choice.label;
+                            enabled: !root.choice-loading;
+                            clicked => { root.choose-resource(choice.value); }
+                        }
+                    }
+                }
+                if root.choice-visible: Rectangle {
+                    height: 64px;
+                    HorizontalLayout {
+                        padding: 16px;
+                        Rectangle { horizontal-stretch: 1; }
+                        AppButton { text: "Back"; width: 88px; clicked => { root.cancel-choices(); } }
+                    }
+                }
+                if root.sidepanel-tab == 1 && !root.choice-visible && !root.value-visible && (root.control-mode != 0 || root.active-field != "" || root.trigger-mode == 1 || root.trigger-mode == 2 || root.trigger-editing || root.action-mode == 1 || root.action-mode == 2): Rectangle {
+                    height: 64px;
+                    border-width: 1px;
+                    border-color: Theme.border;
+                    HorizontalLayout {
+                        padding-left: Theme.space-6;
+                        padding-right: Theme.space-6;
+                        padding-top: 16px;
+                        padding-bottom: 16px;
+                        spacing: Theme.space-2;
+                        Rectangle { horizontal-stretch: 1; }
+                        if root.control-mode == 1 && root.action-mode == 0: AppButton { text: "Cancel"; width: 88px; enabled: !root.edit-pending; clicked => { root.cancel-control(); } }
+                        if root.control-mode == 1 && root.action-mode == 0: AppButton { text: "Done"; width: 88px; primary: true; enabled: !root.edit-pending; clicked => { root.save-control(); } }
+                        if root.active-field != "": AppButton {
+                            text: "Cancel";
+                            width: 88px;
+                            enabled: !root.edit-pending;
+                            clicked => { root.active-field = ""; root.edit-error = ""; }
+                        }
+                        if root.active-field != "": AppButton {
+                            text: "Done";
+                            width: 88px;
+                            primary: true;
+                            enabled: !root.edit-pending;
+                            clicked => { root.apply-field(root.selected-step, root.active-field, root.draft-value); }
+                        }
+                        if root.trigger-mode == 0 && root.action-mode == 1: AppButton {
+                            text: "Back to editor";
+                            primary: true;
+                            clicked => { root.back(); }
+                        }
+                        if root.trigger-mode == 0 && root.action-mode == 2: AppButton {
+                            text: "Cancel";
+                            enabled: !root.edit-pending;
+                            clicked => { root.cancel-action(); }
+                        }
+                        if root.trigger-mode == 0 && root.action-mode == 2: AppButton {
+                            text: "Add action";
+                            primary: true;
+                            enabled: !root.edit-pending;
+                            clicked => { root.save-action(); }
+                        }
+                        if root.trigger-mode == 1 || root.trigger-mode == 2: AppButton {
+                            text: "Cancel";
+                            enabled: !root.trigger-pending;
+                            clicked => { root.cancel-trigger(); }
+                        }
+                        if root.trigger-mode == 2: AppButton {
+                            text: "Done";
+                            primary: true;
+                            enabled: !root.trigger-pending && (root.trigger-kind != "obs.current_scene" || (root.trigger-scene != "" && root.trigger-scene != " "));
+                            clicked => { root.save-trigger(); }
+                        }
+                        if root.trigger-editing: AppButton { text: "Cancel"; width: 88px; enabled: !root.trigger-pending; clicked => { root.cancel-trigger-edit(); } }
+                        if root.trigger-editing: AppButton { text: "Done"; width: 88px; primary: true; enabled: !root.trigger-pending; clicked => { root.save-trigger-edit(); } }
+                    }
+                }
+                }
+            }
+        }
+    }
+}

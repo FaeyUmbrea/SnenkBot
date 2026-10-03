@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "SnenkBot",
+  "version": "0.1.0",
+  "identifier": "com.snenkbot.desktop",
+  "build": {
+    "frontendDist": "../../frontend/dist",
+    "beforeBuildCommand": {
+      "script": "npm run build",
+      "cwd": "../../frontend"
+    },
+    "features": [
+      "native"
+    ]
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "SnenkBot",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1100,
+        "minHeight": 560
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

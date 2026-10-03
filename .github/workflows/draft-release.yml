@@ -1,0 +1,38 @@
+name: Draft Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: draft-release
+  cancel-in-progress: false
+
+jobs:
+  draft:
+    name: Update Draft Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff@2.10.1
+      - name: Generate changelog since last release
+        run: |
+          git-cliff --unreleased --output "$RUNNER_TEMP/changelog.md"
+          if [ ! -s "$RUNNER_TEMP/changelog.md" ]; then
+            printf '%s\n' 'No changes yet.' > "$RUNNER_TEMP/changelog.md"
+          fi
+      - name: Create or update rolling draft
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: next
+          name: Next release (draft)
+          body_path: ${{ runner.temp }}/changelog.md
+          draft: true
+          prerelease: false

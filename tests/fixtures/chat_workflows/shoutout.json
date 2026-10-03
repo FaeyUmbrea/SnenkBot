@@ -1,0 +1,129 @@
+{
+  "workflow": {
+    "id": "shoutout",
+    "revision": 1,
+    "overlap": true,
+    "steps": [
+      {
+        "id": "argument",
+        "on_failure": "Stop",
+        "kind": {
+          "Action": {
+            "capability": "lua.run",
+            "version": 1,
+            "inputs": {
+              "source": {
+                "Literal": "local arguments = values.arguments\nassert(type(arguments) == 'string', 'Command arguments are required')\nreturn { input0 = arguments:match('^[^ ]+') or '' }\n"
+              },
+              "values": {
+                "Object": {
+                  "arguments": {
+                    "Trigger": {
+                      "name": "arguments",
+                      "fallback": null
+                    }
+                  }
+                }
+              }
+            },
+            "deadline_ms": null
+          }
+        }
+      },
+      {
+        "id": "target",
+        "on_failure": "Stop",
+        "kind": {
+          "Action": {
+            "capability": "twitch.get_target_info",
+            "version": 1,
+            "inputs": {
+              "login": {
+                "Reference": {
+                  "step_id": "argument",
+                  "output_id": "input0",
+                  "fallback": null
+                }
+              }
+            },
+            "deadline_ms": null
+          }
+        }
+      },
+      {
+        "id": "message",
+        "on_failure": "Stop",
+        "kind": {
+          "Action": {
+            "capability": "twitch.send_chat",
+            "version": 1,
+            "inputs": {
+              "message": {
+                "Text": [
+                  {
+                    "Literal": "Visit "
+                  },
+                  {
+                    "Value": {
+                      "Reference": {
+                        "step_id": "argument",
+                        "output_id": "input0",
+                        "fallback": null
+                      }
+                    }
+                  },
+                  {
+                    "Literal": " playing "
+                  },
+                  {
+                    "Value": {
+                      "Reference": {
+                        "step_id": "target",
+                        "output_id": "game_name",
+                        "fallback": null
+                      }
+                    }
+                  },
+                  {
+                    "Literal": ": https://twitch.tv/"
+                  },
+                  {
+                    "Value": {
+                      "Reference": {
+                        "step_id": "argument",
+                        "output_id": "input0",
+                        "fallback": null
+                      }
+                    }
+                  }
+                ]
+              },
+              "broadcaster_fallback": {
+                "Literal": true
+              }
+            },
+            "deadline_ms": null
+          }
+        }
+      }
+    ],
+    "outputs": {}
+  },
+  "name": "Shoutout",
+  "triggers": [
+    {
+      "id": "source-trigger",
+      "enabled": true,
+      "kind": {
+        "kind": "integration_event",
+        "integration": "twitch",
+        "event": "chat.command",
+        "filters": {
+          "command": "!so",
+          "aliases": [],
+          "broadcaster_or_moderator": true
+        }
+      }
+    }
+  ]
+}

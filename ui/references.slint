@@ -1,0 +1,33 @@
+import { Theme } from "theme.slint";
+import { AutomationRow } from "library.slint";
+
+export component WorkflowReferences inherits Rectangle {
+    in property <[AutomationRow]> workflows;
+    callback open(string);
+    VerticalLayout {
+        spacing: 0px;
+        Text { text: "Used by"; color: Theme.text; font-size: 16px; font-weight: 600; height: 24px; }
+        Rectangle { height: 24px; }
+        if root.workflows.length == 0: Text { text: "No automations use this integration yet."; color: Theme.muted; }
+        for item in root.workflows: Rectangle {
+            height: 48px;
+            background: Theme.side;
+            accessible-role: button;
+            accessible-label: "Open " + item.title;
+            accessible-action-default => { root.open(item.id); }
+            forward-focus: focus;
+            border-width: focus.has-focus ? 1px : 0px;
+            border-color: Theme.gold;
+            focus := FocusScope {
+                TouchArea { clicked => { focus.focus(); root.open(item.id); } }
+                key-pressed(event) => { if event.text == Key.Return || event.text == Key.Space { root.open(item.id); return accept; } return reject; }
+            }
+            HorizontalLayout {
+                padding-left: 16px; padding-right: 16px; spacing: 16px;
+                Text { text: item.title; color: Theme.text; horizontal-stretch: 1; vertical-alignment: center; overflow: elide; }
+                Text { text: item.trigger-summary; width: 48.6%; color: Theme.muted; vertical-alignment: center; overflow: elide; }
+            }
+            Rectangle { x: 16px; y: 47px; width: parent.width - 32px; height: 1px; background: Theme.border; }
+        }
+    }
+}
