@@ -583,7 +583,6 @@ fn sync_directory(_path: &Path) -> io::Result<()> {
 
 #[cfg(windows)]
 fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
-    use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
 
     #[link(name = "Kernel32")]
@@ -593,11 +592,12 @@ fn replace_file(source: &Path, destination: &Path) -> io::Result<()> {
 
     const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
     const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
-    let source_wide: Vec<u16> = OsStr::new(source.as_os_str())
+    let source_wide: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination_wide: Vec<u16> = destination
+        .as_os_str()
         .encode_wide()
         .chain(Some(0))
         .collect();
-    let destination_wide: Vec<u16> = destination.encode_wide().chain(Some(0)).collect();
     // Both names are NUL terminated UTF-16 paths and refer to files in one directory.
     let result = unsafe {
         MoveFileExW(
