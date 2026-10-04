@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import App from '../src/App.svelte';
 	import { createApplicationController, type DesktopClient } from '../src/lib/application';
 	import { createDesktopClient } from '../src/lib/desktop';
@@ -7,17 +8,22 @@
 		DesktopSnapshot,
 		EditorSnapshot_Serialize
 	} from '../src/lib/contracts/index';
-	import { schemas, workflow } from './fixture';
+	import { schemas as testSchemas, workflow as testWorkflow } from './fixture';
+	import { schemas as showcaseSchemas, workflow as showcaseWorkflow } from './showcase';
+	const showcase = new URLSearchParams(location.search).has('showcase');
+	const schemas = showcase ? showcaseSchemas : testSchemas;
+	const workflow = showcase ? showcaseWorkflow : testWorkflow;
+	const title = showcase ? 'Welcome message' : 'Stream details';
 	const snapshot: DesktopSnapshot = {
 		sequence: 0,
 		startup: { state: 'ready' },
 		workflows: [
 			{
 				id: workflow.id,
-				title: 'Stream details',
+				title,
 				enabled: true,
 				revision: 1,
-				step_count: 1,
+				step_count: workflow.steps.length,
 				has_steps: true,
 				error: null,
 				category: 'Broadcast',
@@ -45,7 +51,7 @@
 		session_id: 'editor',
 		revision: 0,
 		draft: {
-			name: 'Stream details',
+			name: title,
 			enabled: true,
 			workflow,
 			triggers: []
@@ -104,7 +110,12 @@
 			]
 		},
 		defaults: { enabled: false, host: '127.0.0.1', port: 4455, tls: false },
-		values: { enabled: true, host: '192.168.178.44', port: 4455, tls: false }
+		values: {
+			enabled: true,
+			host: showcase ? '127.0.0.1' : '192.168.178.44',
+			port: 4455,
+			tls: false
+		}
 	};
 	const client: DesktopClient = {
 		...createDesktopClient(async () => {
@@ -113,7 +124,7 @@
 		actionDefinitions: async () =>
 			schemas.map((schema) => ({ schema, defaults: { title: 'Native default' } })),
 		twitchAccounts: async () => ({
-			broadcaster: { user_id: '123', login: 'faey' },
+			broadcaster: { user_id: '123', login: showcase ? 'example_channel' : 'faey' },
 			bot: { user_id: '456', login: 'snenkbot' }
 		}),
 		twitchLoginSnapshot: async () => null,
@@ -142,6 +153,9 @@
 			dispose: () => undefined,
 			refresh: async () => undefined
 		};
+	});
+	onMount(() => {
+		if (showcase) void controller.openWorkflow(workflow.id);
 	});
 </script>
 

@@ -15,6 +15,8 @@ You'll need Rust, Cargo and Node.js 22 or newer. Install the frontend dependenci
 
 Run `cargo test --workspace --all-features` and the frontend checks below to verify your changes.
 
+The [desktop architecture and maintenance reference](https://tasks.void.monster/articles/SNENKBOT-A-4) covers the source map, isolated fixtures, data and credentials, generated contracts, signing, release workflows, and remaining Version 1 work. The released desktop entry point is in `crates/snenkbot_desktop`; the root `cargo run` still launches the legacy Slint application.
+
 ## Pull requests
 
 Pull requests should include a short description of:
@@ -47,10 +49,10 @@ Common types:
 A few examples:
 
 ```
-feat: add VBridger config import
-fix: handle missing blend shapes gracefully
-docs: clarify tracking client setup
-refactor: simplify expression parser
+feat: add recording chapter action
+fix: restore Twitch listeners after reconnect
+docs: clarify bot account setup
+refactor: simplify workflow validation
 chore: update dependencies
 ```
 
@@ -58,7 +60,7 @@ If your change is scoped to a specific area, you can add that in parentheses:
 
 ```
 feat(ui): add config file picker
-fix(tracking): reconnect on timeout
+fix(twitch): reconnect on timeout
 ```
 
 That's really all there is to it. Don't overthink the type - just pick whichever one feels right.

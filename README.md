@@ -28,6 +28,8 @@ Use **Automations** to create workflows and **Run History** to inspect their res
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Bugs and project work are tracked in [YouTrack](https://tasks.void.monster/projects/SNENKBOT).
 
+The [maintenance reference](https://tasks.void.monster/articles/SNENKBOT-A-4) describes the current architecture, development and release steps, and unfinished Version 1 work.
+
 ## License
 
 SnenkBot is licensed under [GPLv3](LICENSE). Inter Tight is included under the [SIL Open Font License](assets/fonts/OFL.txt). The shared Snenk dragon symbol is CC0.
