@@ -303,7 +303,7 @@
 	id: string,
 	label: string,
 	input: Input,
-	kind: 'text' | 'secret' | 'integer' | 'toggle' = 'text'
+	kind: import('./contracts').ConfigFieldKind = 'text'
 )}
 	<InputControl
 		{input}

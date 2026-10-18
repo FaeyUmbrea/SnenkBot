@@ -228,6 +228,7 @@ fn fallback_kind(kind: ConfigOutputKind) -> &'static str {
         ConfigOutputKind::Text => "text",
         ConfigOutputKind::Number => "number",
         ConfigOutputKind::Toggle => "toggle",
+        ConfigOutputKind::Json => "json",
     }
 }
 

@@ -2869,10 +2869,15 @@ fn clear_control(window: &AppWindow, state: &mut EditorState) {
 
 fn editor_field_kind(kind: ConfigFieldKind) -> EditorFieldKind {
     match kind {
-        ConfigFieldKind::Text => EditorFieldKind::Text,
+        ConfigFieldKind::Text | ConfigFieldKind::Directory => EditorFieldKind::Text,
         ConfigFieldKind::Integer => EditorFieldKind::Integer,
         ConfigFieldKind::Toggle => EditorFieldKind::Toggle,
         ConfigFieldKind::Secret => EditorFieldKind::Secret,
+        ConfigFieldKind::Json
+        | ConfigFieldKind::StringList
+        | ConfigFieldKind::StringSet
+        | ConfigFieldKind::StringSetMap
+        | ConfigFieldKind::Object(_) => EditorFieldKind::Text,
     }
 }
 

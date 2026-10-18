@@ -11,6 +11,7 @@ use tokio::time::{Instant, timeout_at};
 use tokio_util::sync::CancellationToken;
 
 use crate::engine::Values;
+use crate::event_history::{EventHistory, EventSource};
 use crate::integration::{ReconfigurationRequest, StatusCell};
 use crate::workflows::WorkflowDefinition;
 
@@ -69,6 +70,10 @@ pub struct TwitchListener<B, T, H> {
     health: Arc<StatusCell<TwitchHealth>>,
     endpoint: String,
     changes: ChannelChanges,
+    overlay: Option<Arc<crate::api::EventHub>>,
+    overlay_demand: Option<watch::Receiver<BTreeSet<String>>>,
+    history: Option<EventHistory>,
+    account_changes: watch::Receiver<u64>,
 }
 
 impl<B, T, H> TwitchListener<B, T, H>
@@ -85,6 +90,7 @@ where
         routes: watch::Receiver<Vec<WorkflowDefinition>>,
         health: Arc<StatusCell<TwitchHealth>>,
     ) -> Self {
+        let account_changes = accounts.subscribe_configuration_changes();
         Self {
             accounts,
             session,
@@ -94,7 +100,35 @@ where
             health,
             endpoint: EVENTSUB_URL.to_owned(),
             changes: ChannelChanges::default(),
+            overlay: None,
+            overlay_demand: None,
+            history: None,
+            account_changes,
         }
+    }
+
+    /// Adds API channel demand without creating another EventSub socket.
+    pub fn with_overlay(mut self, overlay: Arc<crate::api::EventHub>) -> Self {
+        self.overlay_demand = Some(overlay.subscribe_demand());
+        self.overlay = Some(overlay);
+        self
+    }
+
+    /// Adds durable history without changing EventSub subscription demand.
+    pub fn with_history(mut self, history: EventHistory) -> Self {
+        self.history = Some(history);
+        self
+    }
+
+    fn desired_kinds(
+        &self,
+        definitions: &[WorkflowDefinition],
+    ) -> Result<BTreeSet<EventSubKind>, String> {
+        let mut kinds = required_kinds(definitions)?;
+        if let Some(demand) = &self.overlay_demand {
+            kinds.extend(super::events::overlay_kinds(&demand.borrow()));
+        }
+        Ok(kinds)
     }
 
     pub async fn run(
@@ -106,11 +140,19 @@ where
         let mut backoff = Duration::from_secs(1);
         let mut seen = RecentIds::default();
         loop {
+            if let Some(overlay) = &self.overlay {
+                let broadcaster_id = self.connected_accounts().await.ok().and_then(|accounts| {
+                    accounts
+                        .get(super::credentials::TwitchRole::Broadcaster)
+                        .map(|account| account.user_id.clone())
+                });
+                overlay.clear_if_other_broadcaster(broadcaster_id.as_deref());
+            }
             let definitions = self.routes.borrow().clone();
             if !details_demand(&definitions) {
                 self.changes.reset();
             }
-            let desired = match required_kinds(&definitions) {
+            let desired = match self.desired_kinds(&definitions) {
                 Ok(kinds) => kinds,
                 Err(error) => {
                     self.set_health(TwitchHealth::Error(error));
@@ -127,19 +169,25 @@ where
                 }
                 continue;
             }
-            // With only unavailable ad listeners, wait without opening a socket
-            // that cannot meet Twitch's first-subscription deadline.
-            if desired.len() == 1
-                && let Ok(accounts) = self.connected_accounts().await
-                && let Some(request) = super::configuration_request(&accounts, &desired)
-            {
-                self.set_health(TwitchHealth::Degraded(request.reason));
-                tokio::select! {
-                    _ = shutdown.cancelled() => break,
-                    changed = self.routes.changed() => if changed.is_err() { break; },
-                    _ = tokio::time::sleep(Duration::from_secs(2)) => {},
+            // Wait if no requested kind can satisfy Twitch's first-subscription deadline.
+            if let Ok(accounts) = self.connected_accounts().await {
+                let scopes = accounts
+                    .get(super::credentials::TwitchRole::Broadcaster)
+                    .map(|account| account.scopes.as_slice())
+                    .unwrap_or(&[]);
+                if desired.iter().all(|kind| missing_scope(*kind, scopes))
+                    && let Some(request) = super::configuration_request(&accounts, &desired)
+                {
+                    self.set_health(TwitchHealth::Degraded(request.reason));
+                    tokio::select! {
+                        _ = shutdown.cancelled() => break,
+                        changed = self.routes.changed() => if changed.is_err() { break; },
+                        changed = self.account_changes.changed() => if changed.is_err() { break; },
+                        changed = async { self.overlay_demand.as_mut().expect("guarded demand").changed().await }, if self.overlay_demand.is_some() => if changed.is_err() { break; },
+                        _ = tokio::time::sleep(Duration::from_secs(2)) => {},
+                    }
+                    continue;
                 }
-                continue;
             }
             self.set_health(TwitchHealth::Connecting);
             let result = self
@@ -158,6 +206,8 @@ where
                     tokio::select! {
                         _ = shutdown.cancelled() => break,
                         changed = self.routes.changed() => if changed.is_err() { break; },
+                        changed = self.account_changes.changed() => if changed.is_err() { break; },
+                        changed = async { self.overlay_demand.as_mut().expect("guarded demand").changed().await }, if self.overlay_demand.is_some() => if changed.is_err() { break; },
                         _ = tokio::time::sleep(backoff) => {}
                     }
                     backoff = (backoff * 2).min(MAX_RETRY);
@@ -193,6 +243,22 @@ where
         let bot_user_id = connected_accounts
             .get(TwitchRole::Bot)
             .map(|account| account.user_id.clone());
+        let mut overlay_channel_demand = self
+            .overlay_demand
+            .as_ref()
+            .is_some_and(|demand| demand.borrow().contains("twitch.channel"));
+        let mut overlay_ready = false;
+        if self
+            .overlay_demand
+            .as_ref()
+            .is_some_and(|demand| !demand.borrow().is_empty())
+            && let Some(overlay) = &self.overlay
+        {
+            match overlay.set_broadcaster(&broadcaster_id) {
+                Ok(()) => overlay_ready = true,
+                Err(error) => on_error(format!("Overlay history unavailable: {error}")),
+            }
+        }
         if let Err(error) = self
             .prepare_channel_changes(&broadcaster_id, authorized.access_token(), true)
             .await
@@ -205,7 +271,7 @@ where
         };
         let mut subscriptions = BTreeMap::new();
         let first_subscription_deadline = Instant::now() + Duration::from_secs(8);
-        let mut desired = match required_kinds(&self.routes.borrow().clone()) {
+        let mut desired = match self.desired_kinds(&self.routes.borrow().clone()) {
             Ok(kinds) => kinds,
             Err(error) => return ConnectionExit::Lost(error),
         };
@@ -235,6 +301,9 @@ where
         let mut subscription_retry = tokio::time::interval(Duration::from_secs(30));
         subscription_retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         subscription_retry.tick().await;
+        let mut overlay_retry = tokio::time::interval(Duration::from_secs(5));
+        overlay_retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        overlay_retry.tick().await;
         let mut reconnect: Option<Reconnect> = None;
         loop {
             let mut needs_reconcile = false;
@@ -242,17 +311,71 @@ where
             tokio::select! {
                 _ = async { tokio::time::sleep_until(details_deadline.expect("guarded deadline")).await }, if details_deadline.is_some() => {
                     if let Some(event) = self.changes.take_ready(Instant::now()) {
+                        if let Some(history) = &self.history {
+                            match serde_json::to_value(&event) {
+                                Ok(payload) => {
+                                    if let Err(error) = history.record(
+                                        EventSource::Twitch,
+                                        super::events::DETAILS_CHANGED_EVENT,
+                                        Some(event.broadcaster_user_id.clone()),
+                                        Some(payload),
+                                    ).await {
+                                        on_error(format!("Twitch details event could not be recorded: {error}"));
+                                    }
+                                }
+                                Err(error) => on_error(format!("Twitch details event could not be serialized: {error}")),
+                            }
+                        }
                         for route in route_event(&super::events::TwitchEvent::DetailsChanged(event), &self.routes.borrow(), RouteOptions { bot_user_id: bot_user_id.as_deref() }) {
                             on_activation(TwitchActivation { workflow_id: route.workflow_id, trigger_id: route.trigger_id, values: route.values });
                         }
                     }
                 }
                 _ = shutdown.cancelled() => return ConnectionExit::RoutesChanged,
+                _ = self.account_changes.changed() => return ConnectionExit::RoutesChanged,
+                _ = overlay_retry.tick(), if !overlay_ready && self.overlay_demand.as_ref().is_some_and(|demand| !demand.borrow().is_empty()) => {
+                    let recovered = self.overlay.as_ref().is_some_and(|overlay| overlay.set_broadcaster(&broadcaster_id).is_ok());
+                    if recovered {
+                        overlay_ready = true;
+                        if self.overlay_demand.as_ref().is_some_and(|demand| demand.borrow().contains("twitch.channel"))
+                            && let Ok(authorized) = self.session.authorize(TwitchCapability::ChannelOwner).await
+                            && authorized.user_id() == broadcaster_id
+                            && let Err(error) = self.prepare_channel_changes(&broadcaster_id, authorized.access_token(), true).await
+                        {
+                            on_error(error);
+                        }
+                    }
+                }
+                changed = async { self.overlay_demand.as_mut().expect("guarded demand").changed().await }, if self.overlay_demand.is_some() => {
+                    if changed.is_err() { return ConnectionExit::RoutesChanged; }
+                    let channel_demand = self.overlay_demand.as_ref().is_some_and(|demand| demand.borrow().contains("twitch.channel"));
+                    let first_channel_demand = channel_demand && !overlay_channel_demand;
+                    overlay_channel_demand = channel_demand;
+                    if !overlay_ready && self.overlay_demand.as_ref().is_some_and(|demand| !demand.borrow().is_empty())
+                        && let Some(overlay) = &self.overlay {
+                        match overlay.set_broadcaster(&broadcaster_id) {
+                            Ok(()) => overlay_ready = true,
+                            Err(error) => on_error(format!("Overlay history unavailable: {error}")),
+                        }
+                    }
+                    desired = match self.desired_kinds(&self.routes.borrow().clone()) {
+                        Ok(kinds) => kinds,
+                        Err(error) => return ConnectionExit::Lost(error),
+                    };
+                    if desired.is_empty() { return ConnectionExit::RoutesChanged; }
+                    let authorized = match self.session.authorize(TwitchCapability::ChannelOwner).await {
+                        Ok(authorized) if authorized.user_id() == broadcaster_id => authorized,
+                        Ok(_) => return ConnectionExit::RoutesChanged,
+                        Err(error) => return ConnectionExit::Lost(error.to_string()),
+                    };
+                    if let Err(error) = self.prepare_channel_changes(&broadcaster_id, authorized.access_token(), first_channel_demand).await { return ConnectionExit::Lost(error); }
+                    needs_reconcile = true;
+                }
                 changed = self.routes.changed() => {
                     if changed.is_err() {
                         return ConnectionExit::RoutesChanged;
                     }
-                    desired = match required_kinds(&self.routes.borrow().clone()) {
+                    desired = match self.desired_kinds(&self.routes.borrow().clone()) {
                         Ok(kinds) => kinds,
                         Err(error) => return ConnectionExit::Lost(error),
                     };
@@ -344,6 +467,29 @@ where
                                     {
                                         continue;
                                     }
+                                    if !matches!(&event, super::events::TwitchEvent::Message(_))
+                                        && let Some(history) = &self.history
+                                    {
+                                        let broadcaster_id = envelope.pointer("/payload/event/broadcaster_user_id")
+                                            .and_then(serde_json::Value::as_str)
+                                            .map(str::to_owned);
+                                        if let Some(broadcaster_id) = broadcaster_id {
+                                            if let Err(error) = history.record(
+                                                EventSource::Twitch,
+                                                event.kind().event_type(),
+                                                Some(broadcaster_id),
+                                                Some(envelope.clone()),
+                                            ).await {
+                                                on_error(format!("Twitch event could not be recorded: {error}"));
+                                            }
+                                        } else {
+                                            on_error("Twitch event has no broadcaster identity for history".into());
+                                        }
+                                    }
+                                    if let Some(overlay) = &self.overlay && overlay_ready
+                                        && let Err(error) = overlay.publish_twitch(&event, &envelope) {
+                                        on_error(format!("Overlay event could not be queued: {error}"));
+                                    }
                                     let definitions = self.routes.borrow().clone();
                                     if let super::events::TwitchEvent::ChannelUpdated(channel) = &event
                                         && details_demand(&definitions)
@@ -431,7 +577,11 @@ where
         token: &str,
         refresh: bool,
     ) -> Result<(), String> {
-        if !details_demand(&self.routes.borrow()) {
+        let overlay_channel_demand = self
+            .overlay_demand
+            .as_ref()
+            .is_some_and(|demand| demand.borrow().contains("twitch.channel"));
+        if !details_demand(&self.routes.borrow()) && !overlay_channel_demand {
             self.changes.reset();
         } else if refresh || !self.changes.initialized_for(broadcaster_id) {
             let channel = self
@@ -442,6 +592,13 @@ where
                 .ok_or("Twitch returned no current stream details")?;
             if channel.broadcaster_id != broadcaster_id {
                 return Err("Twitch returned stream details for another broadcaster".into());
+            }
+            if let Some(overlay) = &self.overlay {
+                overlay.publish_channel(
+                    &channel.game_id,
+                    &channel.game_name,
+                    &channel.broadcaster_id,
+                );
             }
             self.changes.observe(
                 super::events::ChannelUpdated {
@@ -470,9 +627,13 @@ where
     ) -> Result<Vec<SubscriptionFailure>, String> {
         let accounts = self.connected_accounts().await?;
         let configuration = super::configuration_request(&accounts, desired);
+        let broadcaster_scopes = accounts
+            .get(super::credentials::TwitchRole::Broadcaster)
+            .map(|account| account.scopes.as_slice())
+            .unwrap_or(&[]);
         let mut failures = Vec::new();
         for kind in desired {
-            if *kind == EventSubKind::ChannelAdBreakBegin
+            if missing_scope(*kind, broadcaster_scopes)
                 && let Some(request) = &configuration
             {
                 failures.push(SubscriptionFailure::Configuration(request.clone()));
@@ -546,6 +707,8 @@ where
         tokio::select! {
             _ = shutdown.cancelled() => false,
             changed = self.routes.changed() => changed.is_ok(),
+            changed = self.account_changes.changed() => changed.is_ok(),
+            changed = async { self.overlay_demand.as_mut().expect("guarded demand").changed().await }, if self.overlay_demand.is_some() => changed.is_ok(),
         }
     }
 
@@ -591,6 +754,19 @@ fn subscription_error(kind: EventSubKind, error: HelixError) -> String {
     format!("{} subscription failed: {error}", kind.event_type())
 }
 
+/// Checks optional EventSub scopes without invalidating previously connected accounts.
+fn missing_scope(kind: EventSubKind, scopes: &[String]) -> bool {
+    let required = match kind {
+        EventSubKind::ChannelAdBreakBegin => Some("channel:read:ads"),
+        EventSubKind::ChannelSubscribe
+        | EventSubKind::ChannelSubscriptionMessage
+        | EventSubKind::ChannelSubscriptionGift => Some("channel:read:subscriptions"),
+        EventSubKind::ChannelCheer => Some("bits:read"),
+        _ => None,
+    };
+    required.is_some_and(|scope| !scopes.iter().any(|held| held == scope))
+}
+
 enum ConnectionExit {
     RoutesChanged,
     Lost(String),
@@ -632,8 +808,10 @@ mod tests {
     use tokio_websockets::{Message, ServerBuilder};
 
     use super::*;
+    use crate::api::EventHub;
     use crate::engine::Workflow;
     use crate::migration::StoredConfig;
+    use crate::paths::AppPaths;
     use crate::storage::ConfigStore;
     use crate::twitch::credentials::{CredentialError, OAuthTokens, TwitchCredentialStore};
     use crate::twitch::device::{CLIENT_ID, DeviceAuth, DeviceError, FormResponse};
@@ -663,7 +841,7 @@ mod tests {
         }
     }
 
-    struct FakeAuth;
+    struct FakeAuth(&'static str);
 
     impl FormTransport for FakeAuth {
         async fn post_form(
@@ -679,7 +857,7 @@ mod tests {
                 status: 200,
                 body: json!({
                     "client_id": CLIENT_ID,
-                    "user_id": "owner-1",
+                    "user_id": self.0,
                     "login": "owner",
                     "scopes": ["channel:manage:broadcast", "channel:read:ads", "user:read:chat", "user:write:chat"],
                     "expires_in": 3600
@@ -689,13 +867,27 @@ mod tests {
         }
     }
 
-    #[derive(Default)]
     struct FakeHelix {
         requests: Mutex<Vec<String>>,
         subscribed: Notify,
         creates: AtomicUsize,
         deletes: AtomicUsize,
         deny_ads: AtomicBool,
+        channel_broadcaster_id: &'static str,
+    }
+
+    impl Default for FakeHelix {
+        /// Keeps existing tests on their original broadcaster unless a test overrides it.
+        fn default() -> Self {
+            Self {
+                requests: Mutex::new(Vec::new()),
+                subscribed: Notify::new(),
+                creates: AtomicUsize::new(0),
+                deletes: AtomicUsize::new(0),
+                deny_ads: AtomicBool::new(false),
+                channel_broadcaster_id: "owner-1",
+            }
+        }
     }
 
     impl HelixTransport for Arc<FakeHelix> {
@@ -712,7 +904,7 @@ mod tests {
                 });
             }
             if request.method == HelixMethod::Get {
-                return Ok(HelixResponse { status: 200, body: json!({"data":[{"broadcaster_id":"owner-1", "broadcaster_login":"owner", "broadcaster_name":"Owner", "game_id":"1", "game_name":"Old game", "title":"Old title"}]}).to_string().into_bytes(), retry_after: None });
+                return Ok(HelixResponse { status: 200, body: json!({"data":[{"broadcaster_id":self.channel_broadcaster_id, "broadcaster_login":"owner", "broadcaster_name":"Owner", "game_id":"1", "game_name":"Old game", "title":"Old title"}]}).to_string().into_bytes(), retry_after: None });
             }
             let index = self.creates.fetch_add(1, Ordering::SeqCst);
             self.subscribed.notify_one();
@@ -766,6 +958,15 @@ mod tests {
     }
 
     fn fixture_with_scopes(root: &std::path::Path, ads: bool) -> (TestAccounts, TestSession) {
+        fixture_with_identity(root, ads, "owner-1")
+    }
+
+    /** Creates account and authorization test state for one broadcaster identity. */
+    fn fixture_with_identity(
+        root: &std::path::Path,
+        ads: bool,
+        broadcaster_id: &'static str,
+    ) -> (TestAccounts, TestSession) {
         let mut scopes = vec![
             "channel:manage:broadcast",
             "user:read:chat",
@@ -791,7 +992,7 @@ mod tests {
                     version: 1,
                     data: json!({
                         "broadcaster": {
-                            "user_id": "owner-1",
+                            "user_id": broadcaster_id,
                             "login": "owner",
                             "scopes": scopes,
                             "credential_slot": SLOT
@@ -808,7 +1009,7 @@ mod tests {
         ));
         let session = Arc::new(TwitchSession::new(
             Arc::clone(&accounts),
-            DeviceAuth::new(FakeAuth),
+            DeviceAuth::new(FakeAuth(broadcaster_id)),
         ));
         (accounts, session)
     }
@@ -1065,6 +1266,102 @@ mod tests {
         })
         .await
         .unwrap();
+        shutdown.cancel();
+        worker.await.unwrap();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn late_channel_overlay_demand_receives_current_game_without_twitch_update() {
+        let root = tempfile::tempdir().unwrap();
+        let (accounts, session) = fixture_with_identity(root.path(), true, "100");
+        let helix = Arc::new(FakeHelix {
+            channel_broadcaster_id: "100",
+            ..FakeHelix::default()
+        });
+        let socket_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("ws://{}", socket_listener.local_addr().unwrap());
+        let shutdown = CancellationToken::new();
+        let server_shutdown = shutdown.clone();
+        let server = tokio::spawn(async move {
+            let (tcp, _) = socket_listener.accept().await.unwrap();
+            let (_, mut socket) = ServerBuilder::new().accept(tcp).await.unwrap();
+            socket
+                .send(Message::text(
+                    json!({
+                        "metadata": {"message_type": "session_welcome"},
+                        "payload": {"session": {"id": "socket-1", "keepalive_timeout_seconds": 10}}
+                    })
+                    .to_string(),
+                ))
+                .await
+                .unwrap();
+            server_shutdown.cancelled().await;
+        });
+        let paths = AppPaths {
+            config: root.path().join("config"),
+            data: root.path().join("data"),
+            state: root.path().join("state"),
+        };
+        let overlay = EventHub::new(&paths, false, 500);
+        let mut definition = command_definition();
+        definition.triggers[0].kind = TriggerKind::IntegrationEvent {
+            integration: "twitch".into(),
+            event: super::super::events::DETAILS_CHANGED_EVENT.into(),
+            filters: BTreeMap::new(),
+        };
+        let (_routes, receiver) = watch::channel(vec![definition]);
+        let health = Arc::new(StatusCell::new(TwitchHealth::Disabled));
+        let mut source = TwitchListener::new(
+            accounts,
+            session,
+            Arc::new(Helix::new(Arc::clone(&helix))),
+            Arc::new(ChatEchoes::default()),
+            receiver,
+            Arc::clone(&health),
+        )
+        .with_overlay(Arc::clone(&overlay));
+        source.endpoint = endpoint;
+        let worker_shutdown = shutdown.clone();
+        let worker = tokio::spawn(async move {
+            source.run(worker_shutdown, |_| {}, |_| {}).await;
+        });
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if *health.read().unwrap() == TwitchHealth::Connected {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let channel_reads = || {
+            helix
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|url| url.contains("/channels?"))
+                .count()
+        };
+        assert_eq!(channel_reads(), 1);
+        let mut subscription =
+            overlay.subscribe(BTreeSet::from(["twitch.channel".into()]), BTreeMap::new());
+        assert_eq!(subscription.initial[0].data, serde_json::Value::Null);
+        let current = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let frame = subscription.receiver.recv().await.unwrap();
+                if frame.channel == "twitch.channel" && frame.data["id"] == "1" {
+                    break frame;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(current.data["name"], "Old game");
+        assert_eq!(current.data["broadcasterId"], "100");
+        assert_eq!(channel_reads(), 2);
         shutdown.cancel();
         worker.await.unwrap();
         server.await.unwrap();

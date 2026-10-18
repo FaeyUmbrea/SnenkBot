@@ -10,6 +10,14 @@ use crate::engine::Values;
 use crate::schema::{ConfigOutput, DescribeValues};
 use crate::workflows::{TriggerDefinition, TriggerKind, WorkflowDefinition};
 
+/// Restores a received OBS event only when its serialized identity matches the record.
+pub(crate) fn decode_record_payload(name: &str, payload: Value) -> Result<Event, String> {
+    if payload.get("eventType").and_then(Value::as_str) != Some(name) {
+        return Err("OBS event identity does not match its record".into());
+    }
+    serde_json::from_value(payload).map_err(|error| error.to_string())
+}
+
 #[derive(WorkflowValues)]
 struct SceneNameValues {
     #[value(label = "Scene name")]
@@ -312,7 +320,7 @@ pub(super) fn subscriptions(routes: &[ObsRoute]) -> EventSubscription {
     })
 }
 
-pub(super) fn activations(routes: &[ObsRoute], event: &Event) -> Vec<ObsActivation> {
+pub(crate) fn activations(routes: &[ObsRoute], event: &Event) -> Vec<ObsActivation> {
     routes
         .iter()
         .filter_map(|route| {

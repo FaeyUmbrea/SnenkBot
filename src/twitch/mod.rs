@@ -12,12 +12,13 @@ pub mod login;
 pub mod session;
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tokio::sync::watch;
 
 use crate::engine::Engine;
+use crate::event_history::EventHistory;
 use crate::integration::{ConnectionState, ConnectionStatus, StatusCell};
 use crate::paths::AppPaths;
 use crate::runtime::{AppRuntime, RuntimeError};
@@ -90,6 +91,7 @@ pub struct TwitchIntegration {
     routes: watch::Sender<Vec<WorkflowDefinition>>,
     health: Arc<StatusCell<TwitchHealth>>,
     required_events: StatusCell<Result<BTreeSet<events::EventSubKind>, String>>,
+    overlay: Mutex<Option<Arc<crate::api::EventHub>>>,
 }
 
 impl TwitchIntegration {
@@ -121,6 +123,7 @@ impl TwitchIntegration {
             routes,
             health: Arc::new(StatusCell::new(TwitchHealth::Disabled)),
             required_events: StatusCell::new(Ok(BTreeSet::new())),
+            overlay: Mutex::new(None),
         }
     }
 
@@ -181,13 +184,39 @@ impl TwitchIntegration {
         })
     }
 
+    /// Shares API demand with the existing EventSub listener.
+    pub fn set_overlay(&self, overlay: Arc<crate::api::EventHub>) {
+        *self.overlay.lock().expect("overlay lock poisoned") = Some(overlay);
+    }
+
+    /// Reads API demand for Twitch status and reauthorization reporting.
+    fn overlay_demand(&self) -> BTreeSet<String> {
+        self.overlay
+            .lock()
+            .expect("overlay lock poisoned")
+            .as_ref()
+            .map(|overlay| overlay.subscribe_demand().borrow().clone())
+            .unwrap_or_default()
+    }
+
     pub fn start_listener(
         &self,
         runtime: &AppRuntime,
         on_activation: impl Fn(TwitchActivation) + Send + Sync + 'static,
         on_error: impl Fn(String) + Send + Sync + 'static,
     ) -> Result<(), RuntimeError> {
-        let listener = TwitchListener::new(
+        self.start_listener_with_history(runtime, None, on_activation, on_error)
+    }
+
+    /// Records received non-chat EventSub messages before routing activations.
+    pub fn start_listener_with_history(
+        &self,
+        runtime: &AppRuntime,
+        history: Option<EventHistory>,
+        on_activation: impl Fn(TwitchActivation) + Send + Sync + 'static,
+        on_error: impl Fn(String) + Send + Sync + 'static,
+    ) -> Result<(), RuntimeError> {
+        let mut listener = TwitchListener::new(
             Arc::clone(&self.accounts),
             Arc::clone(&self.session),
             Arc::clone(&self.helix),
@@ -195,6 +224,12 @@ impl TwitchIntegration {
             self.routes.subscribe(),
             Arc::clone(&self.health),
         );
+        if let Some(overlay) = self.overlay.lock().expect("overlay lock poisoned").clone() {
+            listener = listener.with_overlay(overlay);
+        }
+        if let Some(history) = history {
+            listener = listener.with_history(history);
+        }
         runtime.spawn_task("Twitch events", move |shutdown| async move {
             listener.run(shutdown, on_activation, on_error).await;
             Ok::<(), std::convert::Infallible>(())
@@ -210,6 +245,9 @@ impl crate::integration::ConfigurationStatus for TwitchIntegration {
             self.required_events.subscribe(),
         ];
         subscriptions.extend(self.session.subscribe_health_changes());
+        if let Some(overlay) = self.overlay.lock().expect("overlay lock poisoned").as_ref() {
+            subscriptions.push(overlay.subscribe_demand_changes());
+        }
         subscriptions
     }
 
@@ -264,12 +302,13 @@ impl crate::integration::ConfigurationStatus for TwitchIntegration {
                 detail,
             });
         }
-        let demanded = self
+        let demanded_by_workflows = self
             .required_events
             .read()
             .expect("Twitch event demand lock poisoned")
             .as_ref()
             .is_ok_and(|required| !required.is_empty());
+        let demanded = demanded_by_workflows || !self.overlay_demand().is_empty();
         let health = self.health();
         if demanded && health != TwitchHealth::Disabled {
             let (state, detail) = match health {
@@ -295,14 +334,13 @@ impl crate::integration::ConfigurationStatus for TwitchIntegration {
         let Ok(accounts) = self.accounts.configured_accounts() else {
             return Vec::new();
         };
-        let Ok(required) = self
+        let mut required = self
             .required_events
             .read()
             .expect("Twitch event demand lock poisoned")
             .clone()
-        else {
-            return Vec::new();
-        };
+            .unwrap_or_default();
+        required.extend(events::overlay_kinds(&self.overlay_demand()));
         configuration_request(&accounts, &required)
             .into_iter()
             .collect()
@@ -314,6 +352,35 @@ fn configuration_request(
     required: &std::collections::BTreeSet<events::EventSubKind>,
 ) -> Option<crate::integration::ReconfigurationRequest> {
     let broadcaster = accounts.get(credentials::TwitchRole::Broadcaster)?;
+    if required.iter().any(|kind| {
+        matches!(
+            *kind,
+            events::EventSubKind::ChannelSubscribe
+                | events::EventSubKind::ChannelSubscriptionMessage
+                | events::EventSubKind::ChannelSubscriptionGift
+        )
+    }) && !broadcaster
+        .scopes
+        .iter()
+        .any(|scope| scope == "channel:read:subscriptions")
+    {
+        return Some(crate::integration::ReconfigurationRequest {
+            integration: "twitch",
+            connection: "broadcaster",
+            reason: "Reconnect your broadcaster account to allow subscription events. Other authorized features remain available.".into(),
+            affected_features: vec!["Overlay support events".into()],
+        });
+    }
+    if required.contains(&events::EventSubKind::ChannelCheer)
+        && !broadcaster.scopes.iter().any(|scope| scope == "bits:read")
+    {
+        return Some(crate::integration::ReconfigurationRequest {
+            integration: "twitch",
+            connection: "broadcaster",
+            reason: "Reconnect your broadcaster account to allow cheer events. Other authorized features remain available.".into(),
+            affected_features: vec!["Overlay support events".into()],
+        });
+    }
     if required.contains(&events::EventSubKind::ChannelAdBreakBegin)
         && !broadcaster
             .scopes
@@ -335,7 +402,45 @@ fn configuration_request(
 mod tests {
     use super::*;
     use credentials::TwitchRole;
+    use serde_json::json;
     use session::TwitchAuthorizationHealth as Health;
+
+    #[test]
+    fn overlay_only_demand_reports_scope_reauthorization_and_clears_on_drop() {
+        let temporary = tempfile::tempdir().unwrap();
+        let paths = AppPaths {
+            config: temporary.path().join("config"),
+            data: temporary.path().join("data"),
+            state: temporary.path().join("state"),
+        };
+        let hub = crate::api::EventHub::new(&paths, false, 500);
+        let accounts: accounts::ConnectedAccounts = serde_json::from_value(json!({
+            "broadcaster": {
+                "user_id":"100", "login":"owner",
+                "scopes":["channel:manage:broadcast","user:read:chat","user:write:chat"],
+                "credential_slot":"00000000-0000-4000-8000-000000000000"
+            },
+            "bot": null
+        }))
+        .unwrap();
+        let demanded = || {
+            let receiver = hub.subscribe_demand();
+            events::overlay_kinds(&receiver.borrow())
+        };
+        assert!(demanded().is_empty());
+        assert!(configuration_request(&accounts, &demanded()).is_none());
+        let changed = hub.subscribe_demand_changes();
+        let lease = hub.subscribe(
+            BTreeSet::from(["twitch.support".into()]),
+            Default::default(),
+        );
+        assert!(changed.has_changed().unwrap());
+        assert!(demanded().contains(&events::EventSubKind::ChannelSubscribe));
+        assert!(configuration_request(&accounts, &demanded()).is_some());
+        drop(lease);
+        assert!(demanded().is_empty());
+        assert!(configuration_request(&accounts, &demanded()).is_none());
+    }
 
     #[test]
     fn transient_authorization_errors_retry_after_cooldown_per_role() {

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import DesktopShell from '../src/lib/DesktopShell.svelte';
-	import ObsConnectionView from '../src/lib/ObsConnectionView.svelte';
+	import ConfigurationView from '../src/lib/ConfigurationView.svelte';
 	import type { ConfigurationSnapshot, ConnectionStatus } from '../src/lib/contracts/index';
 	const fixturePresence = new URLSearchParams(location.search).get('presence');
 	let snapshot = $state<ConfigurationSnapshot>({
@@ -52,7 +52,11 @@
 			]
 		},
 		defaults: { enabled: false, host: '127.0.0.1', port: 4455, tls: false },
-		values: { enabled: true, host: '192.168.178.44', port: 4455, tls: false }
+		values: { enabled: true, host: '192.168.178.44', port: 4455, tls: false },
+		credential: null,
+		authorization: null,
+		authorization_ready: false,
+		collection: null
 	});
 	const connections: ConnectionStatus[] = [
 		{
@@ -89,12 +93,9 @@
 	onDismissError={noEffect}
 >
 	<div class="configuration-content">
-		<ObsConnectionView
-			{connections}
-			workflows={[]}
-			onOpen={noEffect}
+		<ConfigurationView
 			{snapshot}
-			onPresence={async () =>
+			onRefreshCredential={async () =>
 				fixturePresence === 'unavailable'
 					? 'unavailable'
 					: fixturePresence === 'empty'
@@ -104,7 +105,7 @@
 				snapshot = { ...snapshot, revision: snapshot.revision + 1, values: request.values };
 				return { snapshot, notices: [] };
 			}}
-			onSavePassword={async () => 'stored'}
+			onSaveCredential={async () => 'stored'}
 		/>
 	</div>
 </DesktopShell>

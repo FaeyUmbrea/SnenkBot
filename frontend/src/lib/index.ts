@@ -1,12 +1,11 @@
-export { default as ObsConnectionView } from './ObsConnectionView.svelte';
 export { default as IntegrationOverview } from './IntegrationOverview.svelte';
-export { default as VtubeConnectionView } from './VtubeConnectionView.svelte';
+export { default as AuthorizationField } from './AuthorizationField.svelte';
 export { default as HomeView } from './HomeView.svelte';
 export { default as WorkflowCanvas } from './WorkflowCanvas.svelte';
 export { default as ActionCatalog } from './ActionCatalog.svelte';
 export { default as DesktopShell } from './DesktopShell.svelte';
 export { default as ConnectionStatus } from './ConnectionStatus.svelte';
-export { default as TwitchAccountsView } from './TwitchAccountsView.svelte';
+export { default as AccountConnectionsView } from './AccountConnectionsView.svelte';
 export { default as ConfigurationView } from './ConfigurationView.svelte';
 export { default as WorkflowInputDialog } from './WorkflowInputDialog.svelte';
 export { default as HistoryView } from './HistoryView.svelte';

@@ -7,16 +7,26 @@ use thiserror::Error;
 
 use crate::migration::StoredConfig;
 use crate::paths::AppPaths;
+use crate::schema::AuthorizationDescriptor;
 use crate::storage::{ConfigSnapshot, ConfigStore, SaveOutcome, StoreError};
 
 const DOCUMENT_ID: &str = "connection";
 const DEFINITION: &str = "snenkbot.vtube.connection";
 const VERSION: u32 = 1;
 
+/// Native pairing control declared beside VTube Studio's portable settings.
+pub const AUTHORIZATION_DESCRIPTOR: AuthorizationDescriptor = AuthorizationDescriptor {
+    id: "vtube-authorization",
+    label: "Authorization",
+    description: "VTube Studio will ask you to approve the connection when you authorize.",
+    prerequisite_field: Some("enabled"),
+    prerequisite_message: Some("Enable and save VTube Studio settings before authorizing."),
+};
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, crate::ConfigSchema)]
 #[cfg_attr(feature = "desktop-contracts", derive(specta::Type))]
 #[serde(deny_unknown_fields)]
-#[config(id = "snenkbot.vtube.connection", version = 1, title = "VTube Studio")]
+#[config(id = "snenkbot.vtube.connection", version = 1, title = "VTube Studio", authorization = AUTHORIZATION_DESCRIPTOR, category = "devices", integration = "vtube_studio")]
 pub struct VtubeSettings {
     #[config(id = "enabled", label = "Enabled", introduced = 1)]
     pub enabled: bool,
@@ -61,7 +71,8 @@ pub struct LoadedVtubeSettings {
 }
 
 impl LoadedVtubeSettings {
-    pub(crate) fn is_configured(&self) -> bool {
+    /// Reports whether a VTube Studio configuration document exists, even when disabled.
+    pub fn is_configured(&self) -> bool {
         self.snapshot.is_some()
     }
 }

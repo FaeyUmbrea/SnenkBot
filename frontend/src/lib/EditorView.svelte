@@ -1,8 +1,11 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
+	import { get } from 'svelte/store';
 	import type { createApplicationController } from './application';
 	import type {
 		Input,
+		ConfigField,
+		ConfigChoice,
 		StepKind,
 		StepDestination,
 		StepPosition,
@@ -19,6 +22,90 @@
 	let tab = $state<'actions' | 'details'>('actions');
 	let picker = $state<{ stepId: string; fieldId: string; current: Input } | null>(null);
 	let sourceQuery = $state('');
+	let choiceOptions = $state<Record<string, readonly ConfigChoice[]>>({});
+	let openChoiceKey = $state<string | null>(null);
+	let choiceEditing = $state(false);
+	/** Scope cached resource labels to this position and its current dependency. */
+	function choiceKey(field: ConfigField): string {
+		return JSON.stringify([
+			editor.session_id,
+			selected?.id,
+			selectedKind?.Action?.capability,
+			field.id,
+			field.choice_source?.depends_on
+				? selectedKind?.Action?.inputs[field.choice_source.depends_on]
+				: null
+		]);
+	}
+	/** Show selected names when resolved and a compact count while resources are unloaded. */
+	function choiceLabel(field: ConfigField): string {
+		const current = selectedKind?.Action?.inputs[field.id]?.Literal;
+		const selectedValues = Array.isArray(current) ? current : current ? [current] : [];
+		if (!selectedValues.length) return 'None selected';
+		const options = choiceOptions[choiceKey(field)] ?? [];
+		const names = selectedValues.map(
+			(value) => options.find((choice) => choice.value === value)?.label
+		);
+		if (names.every((name) => name !== undefined)) {
+			const visible = names.slice(0, 3).join(', ');
+			return names.length > 3 ? `${visible} and ${names.length - 3} more` : visible;
+		}
+		return `${selectedValues.length} selected`;
+	}
+	/** Keep one generic resource chooser open while successive edits advance the draft revision. */
+	async function loadChoices(field: ConfigField) {
+		const key = choiceKey(field);
+		openChoiceKey = key;
+		const request = {
+			action_id: selectedKind!.Action!.capability,
+			field_id: field.id,
+			depends_on: field.choice_source!.depends_on
+				? String(selectedKind!.Action!.inputs[field.choice_source!.depends_on]?.Literal ?? '')
+				: null
+		};
+		await resources.loadChoices(request);
+		const result = get(resources);
+		if (
+			openChoiceKey === key &&
+			JSON.stringify(result.choiceRequest) === JSON.stringify(request) &&
+			!result.choicesError
+		) {
+			choiceOptions = { ...choiceOptions, [key]: result.choices };
+		}
+	}
+	/** Apply one resource selection before accepting the next toggle against its new revision. */
+	async function chooseResource(field: ConfigField, value: string) {
+		if (choiceEditing || !selected) return;
+		choiceEditing = true;
+		try {
+			await edit({
+				operation: 'set_input',
+				step_id: selected.id,
+				field_id: field.id,
+				value: choiceInput(field, value)
+			});
+		} finally {
+			choiceEditing = false;
+		}
+	}
+	/** Toggle collection choices without changing how single-value inputs are assigned. */
+	function choiceInput(field: ConfigField, value: string): Input {
+		if (field.kind !== 'string_list' && field.kind !== 'string_set') return { Literal: value };
+		const current = selectedKind?.Action?.inputs[field.id]?.Literal;
+		const selected = Array.isArray(current)
+			? current.filter((item): item is string => typeof item === 'string')
+			: [];
+		return {
+			Literal: selected.includes(value)
+				? selected.filter((item) => item !== value)
+				: [...selected, value]
+		};
+	}
+	/** Expose each selected resource to pointer and assistive-technology users. */
+	function choiceSelected(field: ConfigField, value: string): boolean {
+		const current = selectedKind?.Action?.inputs[field.id]?.Literal;
+		return Array.isArray(current) ? current.includes(value) : current === value;
+	}
 	const editor = $derived($application.editor!);
 	const workflow = $derived(editor.draft.workflow);
 	const steps = $derived(allSteps(workflow.steps));
@@ -276,6 +363,8 @@
 								input={selectedKind?.Action.inputs[field.id] ?? { Literal: null }}
 								label={field.label}
 								kind={field.kind}
+								literalLabel={field.choice_source ? choiceLabel(field) : undefined}
+								onLiteralEdit={() => quiet(loadChoices(field))}
 								{steps}
 								schemas={$application.schemas}
 								workflowTitles={titles}
@@ -289,31 +378,22 @@
 									)}
 							/>
 							{#if field.description}<p>{field.description}</p>{/if}
-							{#if field.choice_source}<button
-									onclick={() =>
-										quiet(
-											resources.loadChoices({
-												action_id: selectedKind!.Action!.capability,
-												field_id: field.id,
-												depends_on: field.choice_source!.depends_on
-													? String(
-															selectedKind!.Action!.inputs[field.choice_source!.depends_on]
-																?.Literal ?? ''
-														)
-													: null
-											})
-										)}>Choose {field.label.toLowerCase()}</button
-								>{#if $resources.choiceRequest?.field_id === field.id}{#each $resources.choices as choice (choice.value)}<button
-											onclick={() =>
-												quiet(
-													edit({
-														operation: 'set_input',
-														step_id: selected.id,
-														field_id: field.id,
-														value: { Literal: choice.value }
-													})
-												)}>{choice.label}</button
-										>{/each}{/if}{/if}
+							{#if field.choice_source && openChoiceKey === choiceKey(field)}
+								<div class="resource-choices" role="group" aria-label={`${field.label} choices`}>
+									{#if $resources.choicesLoading}<p role="status">Loading choices…</p>{/if}
+									{#if $resources.choicesError}<p role="alert">{$resources.choicesError}</p>{/if}
+									{#each choiceOptions[choiceKey(field)] ?? [] as choice (choice.value)}
+										<button
+											aria-pressed={choiceSelected(field, choice.value)}
+											disabled={choiceEditing}
+											onclick={() => quiet(chooseResource(field, choice.value))}
+											>{choice.label}</button
+										>
+									{/each}
+									<button onclick={() => quiet(loadChoices(field))}>Refresh choices</button>
+									<button onclick={() => (openChoiceKey = null)}>Done</button>
+								</div>
+							{/if}
 						</div>{/each}{:else if selectedKind?.Call}<label
 						>Automation<select
 							value={selectedKind?.Call.workflow_id}
@@ -491,6 +571,17 @@
 	button:disabled {
 		opacity: 0.5;
 		cursor: default;
+	}
+	.resource-choices {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 6px;
+		margin-top: 6px;
+	}
+	button[aria-pressed='true'] {
+		border-color: var(--amber);
+		background: var(--field);
 	}
 	@media (max-width: 1150px) {
 		.editor-layout {

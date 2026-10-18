@@ -82,7 +82,11 @@
 			<div class="toolbar">
 				{#if toolbar}{@render toolbar()}{/if}
 			</div>
-			<ConnectionStatus {connections} {requests} {onConfigure} />
+			{#if connections.length || requests.length}<ConnectionStatus
+					{connections}
+					{requests}
+					{onConfigure}
+				/>{/if}
 		</header>
 		{#if errors.length || dismissalError}
 			<div class="notices" aria-label="Application notices">

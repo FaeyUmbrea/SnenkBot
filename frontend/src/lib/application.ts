@@ -12,6 +12,7 @@ import type {
 	ActionDefinition,
 	HistoryPage,
 	ConfigSchema,
+	ConfigurationCatalogEntry,
 	ConfigurationSnapshot,
 	ConnectionModule,
 	ConnectionStatus,
@@ -40,6 +41,8 @@ export interface ApplicationState extends ApplicationRoute {
 	snapshot: DesktopSnapshot | null;
 	schemas: ConfigSchema[];
 	definitions: ActionDefinition[];
+	catalog: ConfigurationCatalogEntry[];
+	catalogError: string | null;
 	accounts: TwitchAccountsSnapshot | null;
 	accountLoading: boolean;
 	accountError: string | null;
@@ -72,6 +75,8 @@ export function createApplicationController(
 		snapshot: null,
 		schemas: [],
 		definitions: [],
+		catalog: [],
+		catalogError: null,
 		accounts: null,
 		accountLoading: false,
 		accountError: null,
@@ -99,6 +104,8 @@ export function createApplicationController(
 	let bootstrapPromise: Promise<void> | undefined;
 	let retryPromise: Promise<void> | undefined;
 	let schemasLoaded = false;
+	let catalogLoaded = false;
+	let catalogPromise: Promise<ConfigurationCatalogEntry[]> | undefined;
 	let authenticationLoaded = false;
 	let accountGeneration = 0;
 	let authGeneration = 0;
@@ -210,6 +217,29 @@ export function createApplicationController(
 		lastConnectedAttempt = authentication.attempt_id;
 		if (bootstrapped && state.snapshot?.startup.state === 'ready') void refreshAccounts();
 	}
+	/** Refreshes the native settings directory while keeping its last good entries on failure. */
+	function refreshCatalog(): Promise<ConfigurationCatalogEntry[]> {
+		if (disposed) return Promise.resolve(state.catalog);
+		if (catalogPromise) return catalogPromise;
+		catalogPromise = client
+			.configurationCatalog()
+			.then((catalog) => {
+				catalogLoaded = true;
+				publish({ catalog, catalogError: null });
+				return catalog;
+			})
+			.catch((error: unknown) => {
+				publish({
+					catalogError:
+						error instanceof DesktopRequestError ? error.message : 'Settings could not be loaded.'
+				});
+				throw error;
+			})
+			.finally(() => {
+				catalogPromise = undefined;
+			});
+		return catalogPromise;
+	}
 	function bootstrap(): Promise<void> {
 		if (bootstrapPromise) return bootstrapPromise;
 		if (bootstrapped || disposed || state.snapshot?.startup.state !== 'ready')
@@ -219,6 +249,7 @@ export function createApplicationController(
 		bootstrapPromise = Promise.all([
 			refreshAccounts(),
 			refreshRecentHistory(),
+			catalogLoaded ? Promise.resolve() : refreshCatalog().catch(() => undefined),
 			schemasLoaded
 				? Promise.resolve()
 				: client
@@ -417,21 +448,24 @@ export function createApplicationController(
 	}
 	async function openSettings(module: ConnectionModule) {
 		if (disposed) return;
+		const entry = state.catalog.find((entry) => entry.module === module);
 		const route = currentRoute();
 		if (route.configurationModule !== module) rememberContext();
 		showRoute({
-			page: module === 'obs' ? 'broadcast' : 'devices',
+			page: entry?.category ?? route.page,
 			workflowId: state.workflowId,
 			configurationModule: module
 		});
 		if (state.configurations[module]) return;
 		let pending = configurationOpens.get(module);
 		if (!pending) {
-			pending = request(() => client.openConfiguration({ module })).then((configuration) => {
-				ownedConfigurations.add(configuration.session_id);
-				cacheConfiguration(configuration);
-				return configuration;
-			});
+			pending = request(() => client.openConfiguration({ module, record_id: null })).then(
+				(configuration) => {
+					ownedConfigurations.add(configuration.session_id);
+					cacheConfiguration(configuration);
+					return configuration;
+				}
+			);
 			configurationOpens.set(module, pending);
 			void pending.finally(() => configurationOpens.delete(module)).catch(() => undefined);
 		}
@@ -441,14 +475,30 @@ export function createApplicationController(
 			/* Request errors preserve cached sessions. */
 		}
 	}
-	function configure(connection: ConnectionStatus) {
-		if (disposed) return Promise.resolve();
-		if (connection.integration === 'obs' || connection.integration === 'vtube_studio')
-			return openSettings(connection.integration);
-		if (state.page !== 'streaming' || state.configurationModule)
+	async function configure(connection: ConnectionStatus) {
+		if (disposed) return;
+		let catalog = state.catalog;
+		if (!catalog.length) {
+			try {
+				catalog = await refreshCatalog();
+			} catch (error) {
+				publish({ error: message(error) });
+				throw error;
+			}
+		}
+		const entry = catalog.find((entry) => entry.id === connection.integration);
+		if (entry?.module) return openSettings(entry.module);
+		if (entry && !entry.module) {
 			if (state.page !== 'streaming') rememberContext();
-		navigate('streaming');
-		return Promise.resolve();
+			navigate('accounts');
+			return;
+		}
+		const error = new DesktopRequestError({
+			code: 'unavailable',
+			message: 'This connection has no available settings page.'
+		});
+		publish({ error: error.message });
+		throw error;
 	}
 	function returnToContext() {
 		const routes = state.returnRoutes.slice();
@@ -566,6 +616,7 @@ export function createApplicationController(
 		selectStep,
 		configure,
 		openSettings,
+		refreshCatalog,
 		returnToContext,
 		edit,
 		saveEditor,

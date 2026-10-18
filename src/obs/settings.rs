@@ -5,16 +5,31 @@ use thiserror::Error;
 
 use crate::migration::StoredConfig;
 use crate::paths::AppPaths;
+use crate::schema::CredentialDescriptor;
 use crate::storage::{ConfigSnapshot, ConfigStore, SaveOutcome, StoreError};
 
 const DOCUMENT_ID: &str = "connection";
 const DEFINITION: &str = "snenkbot.obs.connection";
 const VERSION: u32 = 1;
 
+/// Native password editor copy for the OBS connection.
+pub const PASSWORD_CREDENTIAL: CredentialDescriptor = CredentialDescriptor {
+    id: "obs-password",
+    label: "OBS password",
+    empty_description: "Optional password for the OBS connection.",
+    stored_description: "A password is stored. Enter a new one to replace it.",
+    unavailable_description: "Stored password status is unavailable. You can still try saving a password.",
+    save_label: "Save password",
+    saved_message: "OBS password saved.",
+    save_error: "The OBS password could not be saved.",
+    remove_label: None,
+    removed_message: None,
+};
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, crate::ConfigSchema)]
 #[cfg_attr(feature = "desktop-contracts", derive(specta::Type))]
 #[serde(deny_unknown_fields)]
-#[config(id = "snenkbot.obs.connection", version = 1, title = "OBS Studio")]
+#[config(id = "snenkbot.obs.connection", version = 1, title = "OBS Studio", credential = PASSWORD_CREDENTIAL, category = "broadcast", integration = "obs")]
 pub struct ObsSettings {
     #[config(id = "enabled", label = "Enabled", introduced = 1)]
     pub enabled: bool,
@@ -52,7 +67,8 @@ pub struct LoadedObsSettings {
 }
 
 impl LoadedObsSettings {
-    pub(crate) fn is_configured(&self) -> bool {
+    /// Reports whether an OBS configuration document exists, even when disabled.
+    pub fn is_configured(&self) -> bool {
         self.snapshot.is_some()
     }
 }

@@ -1,21 +1,29 @@
 <script lang="ts">
 	import { onDestroy, untrack } from 'svelte';
 	import type {
-		ApproveTwitchLogin,
-		AuthenticationIdentity,
+		AccountRoleSnapshot,
 		ConnectionStatus,
-		CopyTwitchLogin,
 		ReconfigurationRequest,
-		StartTwitchLogin,
 		TwitchAccountsSnapshot,
-		TwitchAuthentication,
-		TwitchRole
+		TwitchAuthentication
 	} from './contracts/index';
 	import { DesktopRequestError } from './desktop';
 	import './theme.css';
 
+	/** Public metadata and identity for one account slot supplied by its integration. */
+	export type AccountRole = Omit<AccountRoleSnapshot, 'descriptor'> & {
+		descriptor: Omit<AccountRoleSnapshot['descriptor'], 'id'> & { id: string };
+	};
+	/** The integration-owned account list presented by the shared account control. */
+	export type AccountConnections = Omit<TwitchAccountsSnapshot, 'roles'> & {
+		roles: AccountRole[];
+	};
+	/** A native device-code attempt adapted to an account role identifier. */
+	export type AccountAuthentication = Omit<TwitchAuthentication, 'role'> & { role: string };
+
 	let {
 		accounts,
+		selectedRole,
 		authentication,
 		connections = [],
 		requests = [],
@@ -27,21 +35,26 @@
 		onBack,
 		backLabel = 'Back'
 	}: {
-		accounts: TwitchAccountsSnapshot;
-		authentication: TwitchAuthentication | null;
+		accounts: AccountConnections;
+		selectedRole?: string;
+		authentication: AccountAuthentication | null;
 		connections?: readonly ConnectionStatus[];
 		requests?: readonly ReconfigurationRequest[];
-		onStart: (request: StartTwitchLogin) => Promise<TwitchAuthentication>;
-		onApprove: (request: ApproveTwitchLogin) => Promise<void>;
-		onCancel: (request: AuthenticationIdentity) => Promise<void>;
-		onOpen: (request: AuthenticationIdentity) => Promise<void>;
-		onCopy: (request: CopyTwitchLogin) => Promise<void>;
+		onStart: (roleId: string) => Promise<unknown>;
+		onApprove: (attemptId: string, userId: string) => Promise<unknown>;
+		onCancel: (attemptId: string) => Promise<unknown>;
+		onOpen: (attemptId: string) => Promise<unknown>;
+		onCopy: (attemptId: string, target: 'link' | 'code') => Promise<unknown>;
 		onBack?: () => void;
 		backLabel?: string;
 	} = $props();
 
 	type Operation = 'start' | 'approve' | 'cancel' | 'open' | 'link' | 'code';
-	const roles: TwitchRole[] = ['broadcaster', 'bot'];
+	const roles = $derived(
+		selectedRole
+			? accounts.roles.filter(({ descriptor }) => descriptor.id === selectedRole)
+			: accounts.roles
+	);
 	let pending = $state<Partial<Record<Operation, boolean>>>({});
 	let feedback = $state('');
 	let errorMessage = $state('');
@@ -53,6 +66,7 @@
 		isSaving || authentication?.phase.state === 'starting' || !!pending.start || !!pending.cancel
 	);
 
+	/** Identifies the current native attempt so late responses cannot change another one. */
 	function authenticationKey() {
 		return authentication ? `${authentication.attempt_id}:${authentication.phase.state}` : '';
 	}
@@ -72,23 +86,22 @@
 		generation += 1;
 	});
 
-	function roleTitle(role: TwitchRole) {
-		return role === 'broadcaster' ? 'Broadcaster account' : 'Bot account';
-	}
-
-	function accountStatus(role: TwitchRole) {
-		const account = accounts[role];
-		if (!account) return role === 'bot' ? 'Uses your broadcaster account' : 'Not signed in';
+	/** Uses public account, reconfiguration and connection state in that order. */
+	function accountStatus(role: AccountRole) {
+		if (!role.account) return role.descriptor.empty_status;
 		const request = requests.find(
-			(item) => item.integration === 'twitch' && item.connection === role
+			(item) =>
+				item.integration === accounts.integration_id && item.connection === role.descriptor.id
 		);
 		if (request) return request.reason;
 		const connection = connections.find(
-			(item) => item.integration === 'twitch' && item.connection === role
+			(item) =>
+				item.integration === accounts.integration_id && item.connection === role.descriptor.id
 		);
 		return connection?.detail || 'Signed in';
 	}
 
+	/** Runs one device-code action and discards feedback from an earlier attempt. */
 	async function perform(operation: Operation, action: () => Promise<unknown>, success = '') {
 		if (pending[operation]) return;
 		const key = authenticationKey();
@@ -112,26 +125,25 @@
 			errorMessage =
 				error instanceof DesktopRequestError
 					? error.message
-					: 'Could not complete this Twitch request. Try again.';
+					: 'Could not complete this account request. Try again.';
 		}
 	}
 
-	function start(role: TwitchRole) {
+	/** Starts the selected declared role without replacing progress from the native feed. */
+	function start(roleId: string) {
 		if (cannotStart) return;
-		// Progress comes from the feed; a delayed command response must not replace it.
-		void perform('start', () => onStart({ role }));
+		void perform('start', () => onStart(roleId));
 	}
 
+	/** Confirms the identity reviewed for the current device-code attempt. */
 	function approve() {
-		if (!authentication || authentication.phase.state !== 'review' || isSaving || pending.cancel)
-			return;
-		const request = {
-			attempt_id: authentication.attempt_id,
-			user_id: authentication.phase.data.user_id
-		};
-		void perform('approve', () => onApprove(request));
+		const attempt = authentication;
+		if (!attempt || attempt.phase.state !== 'review' || isSaving || pending.cancel) return;
+		const userId = attempt.phase.data.user_id;
+		void perform('approve', () => onApprove(attempt.attempt_id, userId));
 	}
 
+	/** Cancels only an in-progress attempt that has not begun saving. */
 	function cancel() {
 		if (
 			!authentication ||
@@ -140,70 +152,60 @@
 			pending.cancel
 		)
 			return;
-		const request = { attempt_id: authentication.attempt_id };
-		void perform('cancel', () => onCancel(request));
+		void perform('cancel', () => onCancel(authentication.attempt_id));
 	}
 
+	/** Opens the activation URL for the current attempt through the owning integration. */
 	function open() {
 		if (!authentication || authentication.phase.state !== 'code' || pending.cancel) return;
-		const request = { attempt_id: authentication.attempt_id };
-		void perform('open', () => onOpen(request));
+		void perform('open', () => onOpen(authentication.attempt_id));
 	}
 
+	/** Copies an activation value without exposing it to another attempt. */
 	function copy(target: 'link' | 'code') {
 		if (!authentication || authentication.phase.state !== 'code' || pending.cancel) return;
-		const request = { attempt_id: authentication.attempt_id, target };
 		void perform(
 			target,
-			() => onCopy(request),
+			() => onCopy(authentication.attempt_id, target),
 			target === 'link' ? 'Link copied.' : 'Code copied.'
 		);
 	}
 </script>
 
-<section class="workflow-editor twitch-view" aria-label="Twitch accounts">
-	<h1>Twitch</h1>
+<section class="workflow-editor account-connections-view" aria-label={`${accounts.title} accounts`}>
+	<h1>{accounts.title}</h1>
 	<div class="account-list">
-		{#each roles as role (role)}
-			<section class="account-panel" aria-label={roleTitle(role)}>
+		{#each roles as role (role.descriptor.id)}
+			{@const descriptor = role.descriptor}
+			<section class="account-panel" aria-label={descriptor.label}>
 				<h2>
-					<span class="account-icon" aria-hidden="true"></span>{roleTitle(role)}{role === 'bot'
-						? ' · optional'
-						: ''}
+					<span class="account-icon" aria-hidden="true"
+					></span>{descriptor.label}{descriptor.optional ? ' · optional' : ''}
 				</h2>
 				<div class="account-row">
-					<p class="account-name">
-						{accounts[role]?.login ??
-							(role === 'bot' ? 'No separate bot account' : 'No account connected')}
-					</p>
+					<p class="account-name">{role.account?.login ?? descriptor.empty_name}</p>
 					<button
 						class="secondary connect"
 						disabled={cannotStart}
-						onclick={() => start(role)}
-						aria-label={`${accounts[role] ? 'Reconnect' : 'Connect'} ${roleTitle(role).toLowerCase()}`}
-						>{pending.start ? 'Starting…' : accounts[role] ? 'Reconnect' : 'Connect'}</button
+						onclick={() => start(descriptor.id)}
+						aria-label={`${role.account ? 'Reconnect' : 'Connect'} ${descriptor.label.toLowerCase()}`}
+						>{pending.start ? 'Starting…' : role.account ? 'Reconnect' : 'Connect'}</button
 					>
 				</div>
 				<p class="account-status">{accountStatus(role)}</p>
-				<p class="account-description">
-					{role === 'broadcaster'
-						? 'Account for channel events and broadcaster actions.'
-						: 'Account used to send chat messages.'}
-				</p>
-				{#if authentication?.role === role && authentication.phase.state !== 'connected' && authentication.phase.state !== 'cancelled'}
-					<div class="authentication-panel" aria-label={`${roleTitle(role)} sign-in`}>
+				<p class="account-description">{descriptor.description}</p>
+				{#if descriptor.help}<p class="account-guidance">{descriptor.help}</p>{/if}
+				{#if authentication?.role === descriptor.id && authentication.phase.state !== 'connected' && authentication.phase.state !== 'cancelled'}
+					<div class="authentication-panel" aria-label={`${descriptor.label} sign-in`}>
 						{#if authentication.phase.state === 'starting'}
-							<p role="status">Preparing Twitch sign-in…</p>
+							<p role="status">Preparing sign-in…</p>
 						{:else if authentication.phase.state === 'code'}
-							<h3>Sign in to your {roleTitle(role).toLowerCase()}</h3>
-							<p>
-								Open the activation link and enter this code. Use a private or incognito window to
-								choose a different Twitch account.
-							</p>
-							<label for="twitch-activation-link">Activation link</label>
+							<h3>Sign in to your {descriptor.label.toLowerCase()}</h3>
+							<p>Open the activation link and enter this code. {accounts.account_selection_hint}</p>
+							<label for="account-activation-link">Activation link</label>
 							<div class="field-row">
 								<input
-									id="twitch-activation-link"
+									id="account-activation-link"
 									readonly
 									value={authentication.phase.data.url}
 								/><button
@@ -212,10 +214,10 @@
 									onclick={() => copy('link')}>{pending.link ? 'Copying…' : 'Copy link'}</button
 								>
 							</div>
-							<label for="twitch-activation-code">Activation code</label>
+							<label for="account-activation-code">Activation code</label>
 							<div class="field-row">
 								<input
-									id="twitch-activation-code"
+									id="account-activation-code"
 									class="activation-code"
 									readonly
 									value={authentication.phase.data.code}
@@ -228,30 +230,29 @@
 							<div class="authentication-actions">
 								<button disabled={pending.open || pending.cancel} onclick={open}
 									>{pending.open ? 'Opening…' : 'Open in browser'}</button
-								><span role="status">Waiting for Twitch sign-in…</span>
+								><span role="status">Waiting for sign-in…</span>
 							</div>
 						{:else if authentication.phase.state === 'review'}
-							<h3>Confirm your {roleTitle(role).toLowerCase()}</h3>
+							<h3>Confirm your {descriptor.label.toLowerCase()}</h3>
 							<p>
 								Use <strong>{authentication.phase.data.login}</strong> as your
-								<strong>{roleTitle(role).toLowerCase()}</strong>?
+								<strong>{descriptor.label.toLowerCase()}</strong>?
 							</p>
-							<p>
-								Check the account before confirming. To choose a different account, try again in a
-								private or incognito window.
-							</p>
+							<p>Check the account before confirming. {accounts.account_selection_hint}</p>
 							<div class="authentication-actions">
 								<button disabled={isSaving || pending.cancel} onclick={approve}
 									>{pending.approve ? 'Saving…' : 'Confirm account'}</button
-								><button class="secondary" disabled={cannotStart} onclick={() => start(role)}
-									>Try another account</button
+								><button
+									class="secondary"
+									disabled={cannotStart}
+									onclick={() => start(descriptor.id)}>Try another account</button
 								>
 							</div>
 						{:else if authentication.phase.state === 'saving'}
-							<p role="status">Saving your {roleTitle(role).toLowerCase()}…</p>
+							<p role="status">Saving your {descriptor.label.toLowerCase()}…</p>
 						{:else if authentication.phase.state === 'failed'}
 							<p role="alert">{authentication.phase.data.message}</p>
-							<button disabled={cannotStart} onclick={() => start(role)}>Try again</button>
+							<button disabled={cannotStart} onclick={() => start(descriptor.id)}>Try again</button>
 						{/if}
 						{#if authentication.phase.state !== 'saving' && authentication.phase.state !== 'failed'}<button
 								class="secondary cancel"
@@ -269,19 +270,13 @@
 		{#if errorMessage}<p role="alert" class="feedback">{errorMessage}</p>{/if}
 		{#if feedback}<p role="status" class="feedback">{feedback}</p>{/if}
 	{/if}
-	<p class="bot-guidance">
-		A separate bot account is optional. Without one, SnenkBot uses your broadcaster account for bot
-		features such as sending chat messages. For the best experience, use your broadcaster account or
-		make your bot a moderator in your channel—Twitch gives these accounts higher chat message
-		limits.
-	</p>
 	{#if onBack}<button class="secondary back" disabled={isSaving} onclick={onBack}
 			>{backLabel}</button
 		>{/if}
 </section>
 
 <style>
-	.twitch-view {
+	.account-connections-view {
 		width: 100%;
 		max-width: 920px;
 		padding-top: 16px;
@@ -354,7 +349,7 @@
 	button.connect {
 		min-width: 156px;
 	}
-	.bot-guidance {
+	.account-guidance {
 		margin: 32px 0 0;
 		max-width: 600px;
 		color: var(--muted);

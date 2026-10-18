@@ -54,11 +54,9 @@
 </script>
 
 <section class="workflow-editor integration-overview" aria-label="Integration overview">
-	<section class="connections" aria-label="Connection">
-		<h2>Connection</h2>
-		{#if matchingConnections.length === 0}
-			<p class="empty-state">No connection configured.</p>
-		{:else}
+	{#if matchingConnections.length > 0}
+		<section class="connections" aria-label="Connection">
+			<h2>Connection</h2>
 			<ul aria-label="Connections">
 				{#each matchingConnections as connection (`${connection.integration}:${connection.connection}`)}
 					<li class="connection-row">
@@ -72,20 +70,20 @@
 						<div class="connection-copy">
 							<strong>{connection.title}</strong>
 							<span class="state-label">{connectionLabels[connection.state]}</span>
-							{#if connection.detail}<span class="detail">{connection.detail}</span>{/if}
+							{#if connection.state !== 'connected' && connection.detail}<span class="detail"
+									>{connection.detail}</span
+								>{/if}
 						</div>
 					</li>
 				{/each}
 			</ul>
-		{/if}
-	</section>
+		</section>
+	{/if}
 	{#if children}<div class="integration-content">{@render children()}</div>{/if}
 
-	<section class="usage" aria-label="Used by">
-		<h2>Used by</h2>
-		{#if references.length === 0}
-			<p class="empty-state">No automations use this integration yet.</p>
-		{:else}
+	{#if references.length}
+		<section class="usage" aria-label="Used by">
+			<h2>Used by</h2>
 			<ul aria-label="Automations using this integration">
 				{#each visible as workflow (workflow.id)}
 					<li class="usage-row">
@@ -116,8 +114,8 @@
 					>
 				</nav>
 			{/if}
-		{/if}
-	</section>
+		</section>
+	{/if}
 </section>
 
 <style>
@@ -170,7 +168,6 @@
 	.detail,
 	.features,
 	.workflow-state,
-	.empty-state,
 	.pagination {
 		color: var(--muted);
 		font-size: 12px;
@@ -215,9 +212,6 @@
 	}
 	.workflow-state.unavailable {
 		color: #e26c77;
-	}
-	.empty-state {
-		margin: 0;
 	}
 	.pagination {
 		display: flex;

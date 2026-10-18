@@ -8,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::integration::StatusCell;
 use crate::migration::StoredConfig;
+use crate::schema::ConfigurationCategory;
 use crate::storage::{ConfigSnapshot, ConfigStore, SaveWarning, StoreError};
 
 use super::credentials::{
@@ -22,6 +23,8 @@ const VERSION: u32 = 1;
 const BROADCASTER_SCOPES: &[&str] = &[
     "channel:manage:broadcast",
     "channel:read:ads",
+    "channel:read:subscriptions",
+    "bits:read",
     "user:read:chat",
     "user:write:chat",
 ];
@@ -31,6 +34,54 @@ const BASE_BROADCASTER_SCOPES: &[&str] = &[
     "user:write:chat",
 ];
 const BOT_SCOPES: &[&str] = &["user:write:chat"];
+
+/// Public account-role copy used by the desktop account control.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "desktop-contracts", derive(specta::Type))]
+pub struct AccountRoleDescriptor {
+    pub id: TwitchRole,
+    pub label: &'static str,
+    pub description: &'static str,
+    pub optional: bool,
+    pub empty_name: &'static str,
+    pub empty_status: &'static str,
+    pub help: Option<&'static str>,
+}
+
+/// Twitch owns the roles and their public labels; credential slots stay in account storage.
+pub const ACCOUNT_ROLES: [AccountRoleDescriptor; 2] = [
+    AccountRoleDescriptor {
+        id: TwitchRole::Broadcaster,
+        label: "Broadcaster account",
+        description: "Account for channel events and broadcaster actions.",
+        optional: false,
+        empty_name: "No account connected",
+        empty_status: "Not signed in",
+        help: None,
+    },
+    AccountRoleDescriptor {
+        id: TwitchRole::Bot,
+        label: "Bot account",
+        description: "Account used to send chat messages.",
+        optional: true,
+        empty_name: "No separate bot account",
+        empty_status: "Uses your broadcaster account",
+        help: Some(
+            "A separate bot account is optional. Without one, SnenkBot uses your broadcaster account for bot features such as sending chat messages. For the best experience, use your broadcaster account or make your bot a moderator in your channel—Twitch gives these accounts higher chat message limits.",
+        ),
+    },
+];
+
+/// Public service title for the account list and desktop settings directory.
+pub const ACCOUNT_TITLE: &str = "Twitch";
+/// Stable settings directory identity for the compiled account connection.
+pub const ACCOUNT_INTEGRATION_ID: &str = "twitch";
+/// Settings directory section for the compiled account connection.
+pub const ACCOUNT_CATEGORY: ConfigurationCategory = ConfigurationCategory::Streaming;
+
+/// Guidance for choosing the intended identity during device-code authorization.
+pub const ACCOUNT_SELECTION_HINT: &str =
+    "To choose a different Twitch account, use a private or incognito window.";
 
 pub fn scopes_for(role: TwitchRole) -> &'static [&'static str] {
     match role {
@@ -493,7 +544,7 @@ mod tests {
                 (
                     "123",
                     "streamer",
-                    r#"["channel:manage:broadcast","channel:read:ads","user:read:chat","user:write:chat"]"#,
+                    r#"["channel:manage:broadcast","channel:read:ads","channel:read:subscriptions","bits:read","user:read:chat","user:write:chat"]"#,
                 )
             } else {
                 ("456", "streamerbot", r#"["user:write:chat"]"#)

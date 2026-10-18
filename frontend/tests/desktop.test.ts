@@ -163,4 +163,18 @@ describe('desktop editor boundary', () => {
 			'The application could not complete this request.'
 		);
 	});
+
+	it('scopes credential reads and saves to the declared configuration session', async () => {
+		const transport = vi.fn<DesktopTransport>().mockResolvedValue('empty');
+		const client = createDesktopClient(transport);
+		const identity = { session_id: 'provider-session', credential_id: 'steamgriddb-key' };
+		await expect(client.configurationCredentialStatus(identity)).resolves.toBe('empty');
+		expect(transport).toHaveBeenCalledWith('configuration_credential_status', {
+			request: identity
+		});
+		await client.saveConfigurationCredential({ ...identity, value: 'fixture-only' });
+		expect(transport).toHaveBeenCalledWith('configuration_credential_save', {
+			request: { ...identity, value: 'fixture-only' }
+		});
+	});
 });

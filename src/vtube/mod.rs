@@ -18,6 +18,7 @@ use tokio::sync::{Mutex, watch};
 
 use crate::choices::{ChoiceCatalog, ChoiceFuture, ChoiceProvider, ConfigChoice};
 use crate::engine::Engine;
+use crate::event_history::{EventHistory, EventSource};
 use crate::integration::{
     ConfigurationStatus, ConnectionState, ConnectionStatus, ReconfigurationRequest, StatusCell,
 };
@@ -38,6 +39,43 @@ use self::settings::{LoadedVtubeSettings, VtubeSettings, VtubeSettingsError, Vtu
 const PLUGIN_NAME: &str = "SnenkBot";
 const PLUGIN_DEVELOPER: &str = "Faey Umbrea";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Uses the VTube Studio protocol's event type names for durable reconstruction.
+pub(crate) fn event_type_name(event: &vtubestudio::data::Event) -> &str {
+    use vtubestudio::data::Event;
+
+    match event {
+        Event::Test(_) => "TestEvent",
+        Event::ModelLoaded(_) => "ModelLoadedEvent",
+        Event::TrackingStatusChanged(_) => "TrackingStatusChangedEvent",
+        Event::BackgroundChanged(_) => "BackgroundChangedEvent",
+        Event::ModelConfigChanged(_) => "ModelConfigChangedEvent",
+        Event::ModelMoved(_) => "ModelMovedEvent",
+        Event::ModelOutline(_) => "ModelOutlineEvent",
+        Event::HotkeyTriggered(_) => "HotkeyTriggeredEvent",
+        Event::ModelAnimation(_) => "ModelAnimationEvent",
+        Event::Item(_) => "ItemEvent",
+        Event::ModelClicked(_) => "ModelClickedEvent",
+        Event::PostProcessing(_) => "PostProcessingEvent",
+        Event::Live2DCubismEditorConnected(_) => "Live2DCubismEditorConnectedEvent",
+        Event::Unknown(data) => data.message_type.as_str(),
+        _ => "UnrecognizedEvent",
+    }
+}
+
+/// Uses the protocol decoder to restore stored known and unknown VTube Studio events.
+pub(crate) fn decode_record_payload(
+    name: &str,
+    payload: serde_json::Value,
+) -> Result<vtubestudio::data::Event, String> {
+    let data = vtubestudio::data::ResponseData {
+        message_type: serde_json::from_value(serde_json::Value::String(name.to_owned()))
+            .map_err(|error| format!("VTube Studio event type is invalid: {error}"))?,
+        data: vtubestudio::data::OpaqueValue::new(&payload).map_err(|error| error.to_string())?,
+    };
+    vtubestudio::data::Event::try_from(data)
+        .map_err(|error| format!("VTube Studio event is invalid: {error}"))
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum VtubeHealth {
@@ -164,6 +202,17 @@ impl VtubeIntegration {
     pub fn start_listener(
         &self,
         runtime: &AppRuntime,
+        on_activation: impl Fn(VtubeActivation) + Send + Sync + 'static,
+        on_error: impl Fn(String) + Send + Sync + 'static,
+    ) -> Result<(), RuntimeError> {
+        self.start_listener_with_history(runtime, None, on_activation, on_error)
+    }
+
+    /// Records received VTube Studio events before routing workflow activations.
+    pub fn start_listener_with_history(
+        &self,
+        runtime: &AppRuntime,
+        history: Option<EventHistory>,
         on_activation: impl Fn(VtubeActivation) + Send + Sync + 'static,
         on_error: impl Fn(String) + Send + Sync + 'static,
     ) -> Result<(), RuntimeError> {
@@ -306,6 +355,21 @@ impl VtubeIntegration {
                             Some(ProtocolEvent::Disconnected) | None => break Some("VTube Studio disconnected".into()),
                             Some(ProtocolEvent::Error(error)) => break Some(format!("VTube Studio event stream failed: {error}")),
                             Some(ProtocolEvent::Api(event)) => {
+                                if let Some(history) = &history {
+                                    let name = event_type_name(&event).to_owned();
+                                    let payload = match &event {
+                                        vtubestudio::data::Event::Unknown(data) => data.data.deserialize::<serde_json::Value>(),
+                                        _ => serde_json::to_value(&event),
+                                    };
+                                    match payload {
+                                        Ok(payload) => {
+                                            if let Err(error) = history.record(EventSource::VtubeStudio, name, None, Some(payload)).await {
+                                                on_error(format!("VTube Studio event could not be recorded: {error}"));
+                                            }
+                                        }
+                                        Err(error) => on_error(format!("VTube Studio event could not be serialized: {error}")),
+                                    }
+                                }
                                 for activation in activations(&routes.borrow(), &event) {
                                     on_activation(activation);
                                 }

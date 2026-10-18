@@ -1,18 +1,21 @@
 <script lang="ts">
 	import DesktopShell from '../src/lib/DesktopShell.svelte';
-	import TwitchAccountsView from '../src/lib/TwitchAccountsView.svelte';
+	import AccountConnectionsView from '../src/lib/AccountConnectionsView.svelte';
 	import type {
-		TwitchAuthentication,
-		TwitchAccountsSnapshot,
-		ConnectionStatus
-	} from '../src/lib/contracts/index';
+		AccountAuthentication,
+		AccountConnections
+	} from '../src/lib/AccountConnectionsView.svelte';
+	import { twitchAccounts } from './account-fixture';
+	import type { ConnectionStatus } from '../src/lib/contracts/index';
 	const parameters = new URLSearchParams(location.search);
 	const phase = parameters.get('phase');
-	let accounts = $state<TwitchAccountsSnapshot>({
-		broadcaster: { user_id: '123', login: 'faey' },
-		bot: parameters.has('bot') ? { user_id: '456', login: 'snenkbot' } : null
-	});
-	let authentication = $state<TwitchAuthentication | null>(
+	let accounts = $state<AccountConnections>(
+		twitchAccounts(
+			{ user_id: '123', login: 'faey' },
+			parameters.has('bot') ? { user_id: '456', login: 'snenkbot' } : null
+		)
+	);
+	let authentication = $state<AccountAuthentication | null>(
 		phase
 			? {
 					attempt_id: 'render-attempt',
@@ -55,11 +58,11 @@
 	onDismissError={noEffect}
 >
 	<div class="content">
-		<TwitchAccountsView
+		<AccountConnectionsView
 			{accounts}
 			{authentication}
 			{connections}
-			onStart={async ({ role }) => {
+			onStart={async (role) => {
 				authentication = {
 					attempt_id: 'render-new',
 					role,
@@ -81,7 +84,14 @@
 						...authentication,
 						phase: { state: 'connected', data: { login: 'snenkbot' } }
 					};
-					accounts = { ...accounts, bot: { login: 'snenkbot', user_id: '456' } };
+					accounts = {
+						...accounts,
+						roles: accounts.roles.map((slot) =>
+							slot.descriptor.id === 'bot'
+								? { ...slot, account: { login: 'snenkbot', user_id: '456' } }
+								: slot
+						)
+					};
 				}
 			}}
 		/>

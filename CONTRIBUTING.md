@@ -17,6 +17,14 @@ Run `cargo test --workspace --all-features` and the frontend checks below to ver
 
 The [desktop architecture and maintenance reference](https://tasks.void.monster/articles/SNENKBOT-A-4) covers the source map, isolated fixtures, data and credentials, generated contracts, signing, release workflows, and remaining Version 1 work. The released desktop entry point is in `crates/snenkbot_desktop`; the root `cargo run` still launches the legacy Slint application.
 
+### Desktop configuration
+
+An integration's Rust settings type declares its fields with `#[derive(ConfigSchema)]` and `#[config(...)]` in the owning module. The declaration also supplies its settings category and stable integration ID. Optional `credential`, `authorization`, and `collection` descriptors name controls that sit beside the form. See `src/schema.rs` for the generated `DescribeConfig` contract and `src/api/config.rs` for a settings type with a named-record collection.
+
+The desktop's `configuration_catalog` lists available integrations and their saved state. `configuration_open` returns a native session snapshot containing the schema, values, and optional descriptors. `SettingsView` uses the same `ConfigurationView` and `ConfigurationCollection` controls for each snapshot. Adding a field to an existing settings type therefore uses the shared form instead of a new integration-specific screen. A new integration still needs its native catalog binding and save/validation path; its domain behavior stays in the integration module.
+
+Keep persistence and secrets behind the native session commands. Form values are portable configuration; credentials use their separate native credential commands, pairing uses the authorization commands, and named records use their owning collection commands. The frontend sends the session and descriptor IDs back to native code rather than interpreting a provider's storage format or credential value. Regenerate the frontend contracts with `cargo run -p snenkbot_desktop --example export_contracts -- frontend/src/lib/contracts` after changing exported Rust types.
+
 ## Pull requests
 
 Pull requests should include a short description of:

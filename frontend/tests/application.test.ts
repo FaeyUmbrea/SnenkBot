@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
 import { createApplicationController, type DesktopClient } from '../src/lib/application';
-import { createDesktopClient } from '../src/lib/desktop';
+import { createDesktopClient, DesktopRequestError } from '../src/lib/desktop';
 import { subscribeDesktopUpdates, type DesktopFeedCallbacks } from '../src/lib/desktop-feed';
 import type {
+	ConfigurationCatalogEntry,
 	ConfigurationSnapshot,
 	ConnectionModule,
+	ConnectionStatus,
 	DesktopSnapshot,
 	EditorSnapshot_Serialize,
 	HistoryPage,
@@ -13,7 +15,55 @@ import type {
 	TwitchAuthentication
 } from '../src/lib/contracts/index';
 import { schemas, workflow } from './fixture';
+import { twitchAccounts as accountSnapshot } from './account-fixture';
 const definitions = schemas.map((schema) => ({ schema, defaults: { native: true } }));
+const catalog: ConfigurationCatalogEntry[] = [
+	{
+		id: 'obs',
+		title: 'OBS Studio',
+		category: 'broadcast',
+		module: 'obs',
+		record_id: null,
+		configured: false,
+		error: null
+	},
+	{
+		id: 'vtube_studio',
+		title: 'VTube Studio',
+		category: 'devices',
+		module: 'vtube_studio',
+		record_id: null,
+		configured: false,
+		error: null
+	},
+	{
+		id: 'api',
+		title: 'Overlay API',
+		category: 'general',
+		module: 'api',
+		record_id: null,
+		configured: false,
+		error: null
+	},
+	{
+		id: 'emotes',
+		title: 'Emotes',
+		category: 'devices',
+		module: 'emotes',
+		record_id: null,
+		configured: false,
+		error: null
+	},
+	{
+		id: 'twitch',
+		title: 'Twitch',
+		category: 'streaming',
+		module: null,
+		record_id: null,
+		configured: false,
+		error: null
+	}
+];
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
@@ -55,7 +105,20 @@ function configuration(module: ConnectionModule = 'obs'): ConfigurationSnapshot 
 		module,
 		schema: schemas[0],
 		defaults: {},
-		values: { title: 'Original' }
+		values: { title: 'Original' },
+		credential: null,
+		authorization: null,
+		authorization_ready: false,
+		collection: null
+	};
+}
+function connection(integration: string): ConnectionStatus {
+	return {
+		integration,
+		connection: 'lookup',
+		title: integration,
+		state: 'connected',
+		detail: 'Ready'
 	};
 }
 function harness(overrides: Partial<DesktopClient> = {}, initial = snapshot()) {
@@ -71,11 +134,12 @@ function harness(overrides: Partial<DesktopClient> = {}, initial = snapshot()) {
 			throw new Error('Unexpected fixture request');
 		}),
 		actionDefinitions: vi.fn(async () => definitions),
-		twitchAccounts: vi.fn(async () => ({ broadcaster: null, bot: null })),
+		twitchAccounts: vi.fn(async () => accountSnapshot()),
 		twitchLoginSnapshot: vi.fn(async () => null),
 		historyPage: vi.fn(async () => ({ entries: [], next_cursor: null })),
 		openEditor: vi.fn(async ({ workflow_id }) => editor(workflow_id)),
 		openConfiguration: vi.fn(async ({ module }) => configuration(module)),
+		configurationCatalog: vi.fn(async () => catalog),
 		closeEditor: vi.fn(async () => undefined),
 		closeConfiguration: vi.fn(async () => undefined),
 		...overrides
@@ -246,6 +310,59 @@ describe('application lifetime', () => {
 		expect(h.client.closeConfiguration).toHaveBeenCalledWith({ session_id: 'config-obs' });
 		expect(h.client.closeConfiguration).toHaveBeenCalledWith({ session_id: 'config-vtube_studio' });
 	});
+	it('routes configured connections using the native catalog and rejects unknown targets', async () => {
+		const ownCatalog = catalog.map((entry) =>
+			entry.id === 'emotes' ? { ...entry, category: 'broadcast' as const } : entry
+		);
+		const h = harness({ configurationCatalog: vi.fn(async () => ownCatalog) });
+		await h.controller.initialize();
+		await h.controller.configure(connection('emotes'));
+		expect(get(h.controller).page).toBe('broadcast');
+		expect(get(h.controller).configurationModule).toBe('emotes');
+		expect(h.client.openConfiguration).toHaveBeenCalledWith({ module: 'emotes', record_id: null });
+		const before = get(h.controller).returnRoutes;
+		await expect(h.controller.configure(connection('unknown'))).rejects.toThrow(
+			'This connection has no available settings page.'
+		);
+		expect(get(h.controller).configurationModule).toBe('emotes');
+		expect(get(h.controller).returnRoutes).toEqual(before);
+		await h.controller.configure(connection('twitch'));
+		expect(get(h.controller).page).toBe('accounts');
+		await h.controller.dispose();
+	});
+	it('routes an account connection from the catalog even when account metadata failed to load', async () => {
+		const twitchAccounts = vi
+			.fn<DesktopClient['twitchAccounts']>()
+			.mockRejectedValue(
+				new DesktopRequestError({ code: 'unavailable', message: 'Accounts unavailable.' })
+			);
+		const h = harness({ twitchAccounts });
+		await h.controller.initialize();
+		expect(get(h.controller).accounts).toBeNull();
+		expect(get(h.controller).accountError).toBe('Accounts unavailable.');
+		await h.controller.configure(connection('twitch'));
+		expect(get(h.controller).page).toBe('accounts');
+		await h.controller.dispose();
+	});
+	it('keeps direct settings access usable when the catalog read fails', async () => {
+		const configurationCatalog = vi
+			.fn<DesktopClient['configurationCatalog']>()
+			.mockResolvedValueOnce(catalog)
+			.mockRejectedValueOnce(new Error('catalog unavailable'));
+		const h = harness({ configurationCatalog });
+		await h.controller.initialize();
+		await expect(h.controller.refreshCatalog()).rejects.toThrow('catalog unavailable');
+		expect(get(h.controller).catalog).toEqual(catalog);
+		expect(get(h.controller).catalogError).toBe('Settings could not be loaded.');
+		await h.controller.openSettings('pronouns');
+		expect(get(h.controller).page).toBe('home');
+		expect(get(h.controller).configurationModule).toBe('pronouns');
+		expect(h.client.openConfiguration).toHaveBeenCalledWith({
+			module: 'pronouns',
+			record_id: null
+		});
+		await h.controller.dispose();
+	});
 	it('late workflow opens populate only their cache and never change the selected workflow', async () => {
 		const opening = deferred<EditorSnapshot_Serialize>();
 		const h = harness({
@@ -323,10 +440,10 @@ describe('application lifetime', () => {
 	it('connected attempts refresh once, latest account request wins, and login replies cannot roll back feed auth', async () => {
 		const login = deferred<TwitchAuthentication>();
 		const old = deferred<TwitchAccountsSnapshot>();
-		const latest = { broadcaster: { user_id: 'new', login: 'new' }, bot: null };
+		const latest = accountSnapshot({ user_id: 'new', login: 'new' });
 		const twitchAccounts = vi
 			.fn<DesktopClient['twitchAccounts']>()
-			.mockResolvedValueOnce({ broadcaster: null, bot: null })
+			.mockResolvedValueOnce(accountSnapshot())
 			.mockReturnValueOnce(old.promise)
 			.mockResolvedValueOnce(latest);
 		const h = harness({ twitchAccounts, startTwitchLogin: vi.fn(() => login.promise) });
@@ -341,7 +458,7 @@ describe('application lifetime', () => {
 		h.send({ ...snapshot(2), twitch_authentication: { ...connected } });
 		expect(twitchAccounts).toHaveBeenCalledTimes(2);
 		await h.controller.refreshAccounts();
-		old.resolve({ broadcaster: { user_id: 'old', login: 'old' }, bot: null });
+		old.resolve(accountSnapshot({ user_id: 'old', login: 'old' }));
 		login.resolve({ ...connected, phase: { state: 'starting' } });
 		await starting;
 		expect(get(h.controller).authentication?.phase.state).toBe('connected');

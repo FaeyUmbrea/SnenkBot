@@ -20,6 +20,7 @@ use tokio::sync::{Mutex, watch};
 
 use crate::choices::{ChoiceCatalog, ChoiceFuture, ChoiceProvider, ConfigChoice};
 use crate::engine::Engine;
+use crate::event_history::{EventHistory, EventSource};
 use crate::integration::{
     ConfigurationStatus, ConnectionState, ConnectionStatus, ReconfigurationRequest, StatusCell,
 };
@@ -220,6 +221,17 @@ impl ObsIntegration {
         runtime: &AppRuntime,
         on_activation: impl Fn(ObsActivation) + Send + Sync + 'static,
     ) -> Result<(), RuntimeError> {
+        self.start_listener_with_history(runtime, None, on_activation, |_| {})
+    }
+
+    /// Records received OBS events before routing their workflow activations.
+    pub fn start_listener_with_history(
+        &self,
+        runtime: &AppRuntime,
+        history: Option<EventHistory>,
+        on_activation: impl Fn(ObsActivation) + Send + Sync + 'static,
+        on_error: impl Fn(String) + Send + Sync + 'static,
+    ) -> Result<(), RuntimeError> {
         let connection = Arc::clone(&self.connection);
         let event_health = Arc::clone(&self.event_health);
         let mut routes = self.routes.subscribe();
@@ -316,6 +328,17 @@ impl ObsIntegration {
                         },
                         event = stream.next_event() => match event {
                             Ok(event) => {
+                                if let Some(history) = &history {
+                                    match serde_json::to_value(&event) {
+                                        Ok(value) => {
+                                            let name = value.get("eventType").and_then(serde_json::Value::as_str).unwrap_or("unknown").to_owned();
+                                            if let Err(error) = history.record(EventSource::Obs, name, None, Some(value)).await {
+                                                on_error(format!("OBS event could not be recorded: {error}"));
+                                            }
+                                        }
+                                        Err(error) => on_error(format!("OBS event could not be serialized: {error}")),
+                                    }
+                                }
                                 for activation in activations(&active, &event) {
                                     on_activation(activation);
                                 }

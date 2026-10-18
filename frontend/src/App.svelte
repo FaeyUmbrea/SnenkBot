@@ -6,14 +6,23 @@
 	import DesktopShell from './lib/DesktopShell.svelte';
 	import HomeView from './lib/HomeView.svelte';
 	import WorkflowLibraryView from './lib/WorkflowLibraryView.svelte';
+	import EventsView from './lib/EventsView.svelte';
 	import HistoryView from './lib/HistoryView.svelte';
-	import ObsConnectionView from './lib/ObsConnectionView.svelte';
-	import VtubeConnectionView from './lib/VtubeConnectionView.svelte';
-	import TwitchAccountsView from './lib/TwitchAccountsView.svelte';
+	import SettingsView from './lib/SettingsView.svelte';
+	import { importSupportHistory } from './lib/event-import';
+	import ConfigurationImport from './lib/ConfigurationImport.svelte';
+	import ConfigurationDirectory from './lib/ConfigurationDirectory.svelte';
+	import IntegrationOverview from './lib/IntegrationOverview.svelte';
+	import AccountConnectionsView from './lib/AccountConnectionsView.svelte';
 	import WorkflowInputDialog from './lib/WorkflowInputDialog.svelte';
 	import EditorView from './lib/EditorView.svelte';
 	import { desktopNavigation, type DesktopPage } from './lib/navigation';
 	import './lib/theme.css';
+	import type {
+		ConfigurationCatalogEntry,
+		ConnectionStatus,
+		SaveConfiguration
+	} from './lib/contracts';
 	let {
 		client = createDesktopClient(),
 		controller = createApplicationController(client)
@@ -22,23 +31,78 @@
 		controller?: ReturnType<typeof createApplicationController>;
 	} = $props();
 	const application = untrack(() => controller);
+	let selectedAccountRole = $state<string | undefined>(undefined);
+	/** Save through the existing session and refresh the configured-entry directory. */
+	async function saveConfiguration(request: SaveConfiguration) {
+		const result = await controller.saveConfiguration(request);
+		await controller.refreshCatalog().catch(() => undefined);
+		return result;
+	}
+	/** Open one native catalog entry in its existing configuration or account editor. */
+	function selectConfiguration(entry: ConfigurationCatalogEntry) {
+		if (entry.module) quiet(controller.openSettings(entry.module));
+		else {
+			selectedAccountRole = undefined;
+			controller.navigate('accounts');
+		}
+	}
+	/** Open the selected connection while preserving its account role. */
+	function configureConnection(connection: ConnectionStatus) {
+		selectedAccountRole =
+			connection.integration === $application.accounts?.integration_id
+				? $application.accounts.roles.find(
+						({ descriptor }) => descriptor.id === connection.connection
+					)?.descriptor.id
+				: undefined;
+		quiet(controller.configure(connection));
+	}
+	/** Start only an account role declared by the native integration. */
+	async function startAccountLogin(id: string) {
+		const role = $application.accounts?.roles.find(({ descriptor }) => descriptor.id === id)
+			?.descriptor.id;
+		if (!role) throw new Error('This account role is unavailable.');
+		return controller.startTwitchLogin({ role });
+	}
+
+	const accountEntry = $derived(
+		$application.catalog.find((entry) => entry.id === $application.accounts?.integration_id) ??
+			$application.catalog.find((entry) => !entry.module)
+	);
 	const workflows = $derived($application.snapshot?.workflows ?? []);
 	const connections = $derived($application.snapshot?.connections ?? []);
 	const titles = $derived(Object.fromEntries(workflows.map((w) => [w.id, w.title])));
 	const title = $derived(
 		$application.page === 'automations' && $application.editor
 			? ($application.editor.draft.name ?? titles[$application.workflowId ?? ''] ?? 'Automation')
-			: (desktopNavigation.find((p) => p.id === $application.page)?.title ?? 'SnenkBot')
+			: (($application.page === 'general' ? 'General' : $application.configuration?.schema.title) ??
+					($application.page === 'accounts'
+						? ($application.accounts?.title ?? accountEntry?.title ?? 'Accounts')
+						: (desktopNavigation.find((p) => p.id === $application.page)?.title ?? 'SnenkBot')))
 	);
+	/** Retry a failed settings read without restarting unrelated application services. */
+	function retryRequest() {
+		const module = $application.configurationModule;
+		quiet(
+			module && !$application.configuration
+				? controller.openSettings(module)
+				: controller.retryStartup()
+		);
+	}
 	function quiet(operation: Promise<unknown>) {
 		void operation.catch(() => undefined);
 	}
 	function navigate(page: DesktopPage) {
 		if (page === 'automations') controller.showLibrary();
-		else if (page === 'broadcast') quiet(controller.openSettings('obs'));
-		else if (page === 'devices') quiet(controller.openSettings('vtube_studio'));
 		else if (page === 'history') controller.openHistory();
-		else controller.navigate(page);
+		else if (page === 'general') {
+			controller.navigate(page);
+			const entries = $application.catalog.filter((entry) => entry.category === page);
+			if (entries.length === 1) selectConfiguration(entries[0]);
+			else quiet(controller.refreshCatalog());
+		} else {
+			controller.navigate(page);
+			if (['broadcast', 'streaming', 'devices'].includes(page)) quiet(controller.refreshCatalog());
+		}
 	}
 	onMount(() => {
 		void controller.initialize().then(async () => {
@@ -59,13 +123,13 @@
 </script>
 
 <DesktopShell
-	page={$application.page}
+	page={$application.page === 'accounts' ? 'streaming' : $application.page}
 	{title}
 	{connections}
 	requests={$application.snapshot?.reconfiguration_requests ?? []}
 	errors={$application.snapshot?.errors ?? []}
 	onNavigate={navigate}
-	onConfigure={(connection) => quiet(controller.configure(connection))}
+	onConfigure={configureConnection}
 	onDismissError={(id) => controller.dismissError({ id })}
 	onBack={$application.returnRoutes.length
 		? controller.returnToContext
@@ -75,7 +139,7 @@
 >
 	{#if $application.error}<div class="application-error" role="alert">
 			<span>{$application.error}</span><button onclick={controller.clearError}>Dismiss</button
-			><button onclick={() => quiet(controller.retryStartup())}>Retry</button>
+			><button onclick={retryRequest}>Retry</button>
 		</div>{/if}
 	{#if !$application.snapshot}<p class="loading">Starting SnenkBot…</p>
 	{:else if $application.snapshot.startup.state !== 'ready'}<div class="loading">
@@ -84,6 +148,15 @@
 			<button onclick={() => quiet(controller.retryStartup())}>Retry startup</button>
 		</div>
 	{:else}
+		{#if $application.configurationModule && !$application.configuration}
+			<section class="page-view settings-page" aria-label="Settings loading">
+				{#if $application.loading}<p role="status">Loading settings…</p>
+				{:else}<h2>Settings could not be opened</h2>
+					<p>Your saved configuration has not been changed.</p>
+					<button onclick={retryRequest}>Retry settings</button>
+				{/if}
+			</section>
+		{/if}
 		<div class="page-view" hidden={$application.page !== 'home'}>
 			<HomeView
 				{connections}
@@ -91,7 +164,7 @@
 				history={$application.recentHistory}
 				historyLoading={$application.recentHistoryLoading}
 				historyError={$application.recentHistoryError ?? ''}
-				onConfigure={(c) => quiet(controller.configure(c))}
+				onConfigure={configureConnection}
 				onNavigate={navigate}
 				onOpen={(id) => quiet(controller.openWorkflow(id))}
 				onRun={controller.run}
@@ -129,63 +202,84 @@
 					onSelectRun={controller.selectHistoryRun}
 				/>
 			</div>{/if}
-		{#if $application.configurations.obs}<div
-				class="page-view settings-page"
-				hidden={$application.configurationModule !== 'obs'}
-			>
-				<ObsConnectionView
-					snapshot={$application.configurations.obs}
-					{connections}
-					{workflows}
-					onOpen={(id) => quiet(controller.openWorkflow(id))}
-					onSave={controller.saveConfiguration}
-					onPresence={client.obsPasswordStatus}
-					onSavePassword={client.saveObsPassword}
-				/>
-			</div>{/if}
-		{#if $application.configurations.vtube_studio}<div
-				class="page-view settings-page"
-				hidden={$application.configurationModule !== 'vtube_studio'}
-			>
-				<VtubeConnectionView
-					snapshot={$application.configurations.vtube_studio}
-					{connections}
-					{workflows}
-					onOpen={(id) => quiet(controller.openWorkflow(id))}
-					onSave={controller.saveConfiguration}
-					onPresence={client.vtubeAuthorizationStatus}
-					onAuthorize={client.authorizeVtube}
-					onForget={client.forgetVtubeAuthorization}
-				/>
-			</div>{/if}
-		<div class="page-view settings-page" hidden={$application.page !== 'streaming'}>
-			{#if $application.accounts}<TwitchAccountsView
+		<div class="page-view settings-page" hidden={$application.page !== 'accounts'}>
+			{#if $application.accounts}<AccountConnectionsView
 					accounts={$application.accounts}
+					selectedRole={selectedAccountRole}
 					authentication={$application.authentication}
 					{connections}
 					requests={$application.snapshot.reconfiguration_requests}
-					onStart={controller.startTwitchLogin}
-					onApprove={controller.approveTwitchLogin}
-					onCancel={controller.cancelTwitchLogin}
-					onOpen={controller.openTwitchLogin}
-					onCopy={controller.copyTwitchLogin}
+					onStart={startAccountLogin}
+					onApprove={(attempt_id, user_id) =>
+						controller.approveTwitchLogin({ attempt_id, user_id })}
+					onCancel={(attempt_id) => controller.cancelTwitchLogin({ attempt_id })}
+					onOpen={(attempt_id) => controller.openTwitchLogin({ attempt_id })}
+					onCopy={(attempt_id, target) => controller.copyTwitchLogin({ attempt_id, target })}
+					onBack={() =>
+						accountEntry ? navigate(accountEntry.category) : controller.returnToContext()}
+					backLabel={desktopNavigation.find((page) => page.id === accountEntry?.category)?.title ??
+						'Back'}
 				/>{:else}<div class="loading">
 					<p>{$application.accountError ?? 'Loading accounts…'}</p>
 					<button onclick={() => quiet(controller.refreshAccounts())}>Retry accounts</button>
 				</div>{/if}
 		</div>
-		{#if $application.page === 'general'}<div class="general">
-				<h2>General</h2>
-				<p>
-					SnenkBot connects configured integrations when it starts. Automations and saved versions
-					are stored locally.
-				</p>
-				<div class="general-actions">
-					<button onclick={() => navigate('broadcast')}>Configure OBS</button><button
-						onclick={() => navigate('streaming')}>Configure Twitch</button
-					><button onclick={() => navigate('devices')}>Configure VTube Studio</button>
-				</div>
+
+		{#if $application.page === 'events'}<div class="page-view settings-page">
+				<EventsView
+					load={client.eventsList}
+					targets={client.eventsTargets}
+					replay={client.eventsReplay}
+				/>
+				<ConfigurationImport
+					label="Import support events"
+					description="Import an existing events.json history file."
+					maxBytes={2 * 1024 * 1024}
+					onImport={(value) => importSupportHistory(client, value)}
+				/>
 			</div>{/if}
+
+		{#if ['general', 'broadcast', 'streaming', 'devices'].includes($application.page) && !$application.configurationModule}
+			<div class="page-view settings-page">
+				{#if $application.catalogError}<p role="alert">{$application.catalogError}</p>
+					<button onclick={() => quiet(controller.refreshCatalog())}>Retry</button>{/if}
+				{#key $application.page}<ConfigurationDirectory
+						title={desktopNavigation.find((page) => page.id === $application.page)?.title ??
+							'Settings'}
+						entries={$application.catalog.filter((entry) => entry.category === $application.page)}
+						onSelect={selectConfiguration}
+					/>{/key}
+			</div>
+		{/if}
+		{#each Object.values($application.configurations) as config (config.module)}
+			{@const entry = $application.catalog.find((entry) => entry.module === config.module)}
+			<div
+				class="page-view settings-page"
+				hidden={$application.configurationModule !== config.module}
+			>
+				<IntegrationOverview
+					integration={entry?.id ?? config.module}
+					{connections}
+					{workflows}
+					onOpen={(id) => quiet(controller.openWorkflow(id))}
+				>
+					{#key config.session_id}
+						<SettingsView
+							snapshot={config}
+							{client}
+							onSave={saveConfiguration}
+							active={$application.configurationModule === config.module}
+							onBack={entry?.category === 'general'
+								? undefined
+								: () => (entry ? navigate(entry.category) : controller.returnToContext())}
+							backLabel={entry
+								? (desktopNavigation.find((page) => page.id === entry.category)?.title ?? 'Back')
+								: 'Back'}
+						/>
+					{/key}
+				</IntegrationOverview>
+			</div>
+		{/each}
 	{/if}
 </DesktopShell>
 <WorkflowInputDialog
@@ -231,29 +325,7 @@
 	.application-error span {
 		flex: 1;
 	}
-	.loading,
-	.general {
+	.loading {
 		padding: 24px;
-	}
-	.general h2 {
-		margin: 0;
-		font-size: 16px;
-	}
-	.general p {
-		max-width: 600px;
-		line-height: 1.5;
-		color: var(--muted);
-	}
-	.general-actions {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 12px;
-	}
-	.general button {
-		min-height: 32px;
-		padding: 6px 12px;
-		border: 1px solid var(--border);
-		border-radius: 6px;
-		background: var(--surface);
 	}
 </style>

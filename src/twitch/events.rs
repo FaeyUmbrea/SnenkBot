@@ -72,6 +72,10 @@ pub fn trigger_value_schema(kind: &TriggerKind) -> Option<Vec<ConfigOutput>> {
 pub enum EventSubKind {
     ChannelChatMessage,
     ChannelChatNotification,
+    ChannelSubscribe,
+    ChannelSubscriptionMessage,
+    ChannelSubscriptionGift,
+    ChannelCheer,
     ChannelAdBreakBegin,
     ChannelUpdate,
 }
@@ -81,6 +85,10 @@ impl EventSubKind {
         match self {
             Self::ChannelChatMessage => "channel.chat.message",
             Self::ChannelChatNotification => "channel.chat.notification",
+            Self::ChannelSubscribe => "channel.subscribe",
+            Self::ChannelSubscriptionMessage => "channel.subscription.message",
+            Self::ChannelSubscriptionGift => "channel.subscription.gift",
+            Self::ChannelCheer => "channel.cheer",
             Self::ChannelAdBreakBegin => "channel.ad_break.begin",
             Self::ChannelUpdate => "channel.update",
         }
@@ -90,6 +98,10 @@ impl EventSubKind {
         match self {
             Self::ChannelChatMessage => MESSAGE_EVENT,
             Self::ChannelChatNotification => NOTIFICATION_EVENT,
+            Self::ChannelSubscribe => "channel.subscribe",
+            Self::ChannelSubscriptionMessage => "channel.subscription.message",
+            Self::ChannelSubscriptionGift => "channel.subscription.gift",
+            Self::ChannelCheer => "channel.cheer",
             Self::ChannelAdBreakBegin => AD_BREAK_EVENT,
             Self::ChannelUpdate => CHANNEL_UPDATE_EVENT,
         }
@@ -103,10 +115,34 @@ impl EventSubKind {
     }
 }
 
+/// Maps active API channels and recording demand to their EventSub subscription types.
+pub fn overlay_kinds(channels: &BTreeSet<String>) -> BTreeSet<EventSubKind> {
+    let mut kinds = BTreeSet::new();
+    if channels.contains("twitch.chat") {
+        kinds.insert(EventSubKind::ChannelChatMessage);
+    }
+    if channels.contains("twitch.support") {
+        kinds.extend([
+            EventSubKind::ChannelSubscribe,
+            EventSubKind::ChannelSubscriptionMessage,
+            EventSubKind::ChannelSubscriptionGift,
+            EventSubKind::ChannelCheer,
+        ]);
+    }
+    if channels.contains("twitch.channel") {
+        kinds.insert(EventSubKind::ChannelUpdate);
+    }
+    kinds
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TwitchEvent {
     Message(ChatMessage),
     Notification(ChatNotification),
+    Subscription(Value),
+    SubscriptionMessage(Value),
+    SubscriptionGift(Value),
+    Cheer(Value),
     AdBreakBegin(AdBreakBegin),
     ChannelUpdated(ChannelUpdated),
     DetailsChanged(ChannelUpdated),
@@ -117,6 +153,10 @@ impl TwitchEvent {
         match self {
             Self::Message(_) => EventSubKind::ChannelChatMessage,
             Self::Notification(_) => EventSubKind::ChannelChatNotification,
+            Self::Subscription(_) => EventSubKind::ChannelSubscribe,
+            Self::SubscriptionMessage(_) => EventSubKind::ChannelSubscriptionMessage,
+            Self::SubscriptionGift(_) => EventSubKind::ChannelSubscriptionGift,
+            Self::Cheer(_) => EventSubKind::ChannelCheer,
             Self::AdBreakBegin(_) => EventSubKind::ChannelAdBreakBegin,
             Self::ChannelUpdated(_) | Self::DetailsChanged(_) => EventSubKind::ChannelUpdate,
         }
@@ -126,6 +166,10 @@ impl TwitchEvent {
         match self {
             Self::Message(message) => message.values(),
             Self::Notification(notification) => notification.values(),
+            Self::Subscription(_) | Self::SubscriptionMessage(_) | Self::SubscriptionGift(_) => {
+                Values::new()
+            }
+            Self::Cheer(_) => Values::new(),
             Self::AdBreakBegin(ad_break) => ad_break.values(),
             Self::ChannelUpdated(channel) => channel.values(),
             Self::DetailsChanged(channel) => {
@@ -208,7 +252,7 @@ pub struct AdBreakBegin {
     pub is_automatic: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, WorkflowValues)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize, WorkflowValues)]
 #[workflow_values(event = "channel.updated")]
 pub struct ChannelUpdated {
     #[value(label = "Broadcaster user ID")]
@@ -285,6 +329,10 @@ pub fn decode_event(envelope: &Value) -> Result<TwitchEvent, DecodeError> {
     let kind = match (event_type.as_str(), version.as_str()) {
         ("channel.chat.message", "1") => EventSubKind::ChannelChatMessage,
         ("channel.chat.notification", "1") => EventSubKind::ChannelChatNotification,
+        ("channel.subscribe", "1") => EventSubKind::ChannelSubscribe,
+        ("channel.subscription.message", "1") => EventSubKind::ChannelSubscriptionMessage,
+        ("channel.subscription.gift", "1") => EventSubKind::ChannelSubscriptionGift,
+        ("channel.cheer", "1") => EventSubKind::ChannelCheer,
         ("channel.ad_break.begin", "1") => EventSubKind::ChannelAdBreakBegin,
         ("channel.update", "2") => EventSubKind::ChannelUpdate,
         _ => {
@@ -299,11 +347,48 @@ pub fn decode_event(envelope: &Value) -> Result<TwitchEvent, DecodeError> {
         EventSubKind::ChannelChatNotification => {
             decode_notification(event).map(TwitchEvent::Notification)
         }
+        EventSubKind::ChannelSubscribe => {
+            Ok(TwitchEvent::Subscription(Value::Object(event.clone())))
+        }
+        EventSubKind::ChannelSubscriptionMessage => Ok(TwitchEvent::SubscriptionMessage(
+            Value::Object(event.clone()),
+        )),
+        EventSubKind::ChannelSubscriptionGift => {
+            Ok(TwitchEvent::SubscriptionGift(Value::Object(event.clone())))
+        }
+        EventSubKind::ChannelCheer => Ok(TwitchEvent::Cheer(Value::Object(event.clone()))),
         EventSubKind::ChannelAdBreakBegin => decode_ad_break(event).map(TwitchEvent::AdBreakBegin),
         EventSubKind::ChannelUpdate => {
             decode_channel_update(event).map(TwitchEvent::ChannelUpdated)
         }
     }
+}
+
+/// Reconstructs a stored EventSub notification or a settled channel-details event.
+pub(crate) fn decode_record_payload(
+    name: &str,
+    broadcaster_id: Option<&str>,
+    payload: Value,
+) -> Result<TwitchEvent, String> {
+    if name == DETAILS_CHANGED_EVENT {
+        let channel: ChannelUpdated = serde_json::from_value(payload)
+            .map_err(|error| format!("Twitch details event is invalid: {error}"))?;
+        if broadcaster_id != Some(channel.broadcaster_user_id.as_str()) {
+            return Err("Twitch details event identity does not match its record".into());
+        }
+        return Ok(TwitchEvent::DetailsChanged(channel));
+    }
+    let event = decode_event(&payload).map_err(|error| error.to_string())?;
+    if matches!(event, TwitchEvent::Message(_)) {
+        return Err("Chat messages cannot be replayed".into());
+    }
+    let payload_broadcaster = payload
+        .pointer("/payload/event/broadcaster_user_id")
+        .and_then(Value::as_str);
+    if broadcaster_id != payload_broadcaster || name != event.kind().event_type() {
+        return Err("Twitch event identity does not match its record".into());
+    }
+    Ok(event)
 }
 
 /// Route a decoded event to enabled Twitch integration triggers.
@@ -394,7 +479,11 @@ fn source_only_or_bot(event: &TwitchEvent, bot_user_id: Option<&str>) -> bool {
             notification.is_source_only
                 || bot_user_id.is_some_and(|bot_id| notification.chatter_user_id == bot_id)
         }
-        TwitchEvent::AdBreakBegin(_)
+        TwitchEvent::Subscription(_)
+        | TwitchEvent::SubscriptionMessage(_)
+        | TwitchEvent::SubscriptionGift(_)
+        | TwitchEvent::Cheer(_)
+        | TwitchEvent::AdBreakBegin(_)
         | TwitchEvent::ChannelUpdated(_)
         | TwitchEvent::DetailsChanged(_) => false,
     }
@@ -804,6 +893,32 @@ mod tests {
         )
     }
 
+    #[test]
+    fn support_event_types_decode_independently_of_chat_notices() {
+        for (name, expected) in [
+            ("channel.subscribe", EventSubKind::ChannelSubscribe),
+            (
+                "channel.subscription.message",
+                EventSubKind::ChannelSubscriptionMessage,
+            ),
+            (
+                "channel.subscription.gift",
+                EventSubKind::ChannelSubscriptionGift,
+            ),
+            ("channel.cheer", EventSubKind::ChannelCheer),
+        ] {
+            let decoded =
+                decode_event(&envelope(name, json!({"broadcaster_user_id":"100"}))).unwrap();
+            assert_eq!(decoded.kind(), expected);
+        }
+        assert_eq!(decode_event(&envelope("channel.chat.notification", json!({
+            "broadcaster_user_id":"100", "broadcaster_user_login":"owner", "broadcaster_user_name":"Owner",
+            "chatter_user_id":"200", "chatter_user_login":"viewer", "chatter_user_name":"Viewer",
+            "notice_type":"bits_badge_tier", "message_id":"notice", "message": {"text":"Milestone"},
+            "message_type":"text", "is_source_only":false
+        }))).unwrap().kind(), EventSubKind::ChannelChatNotification);
+    }
+
     fn workflow(trigger_id: &str, event: &str, filters: serde_json::Value) -> WorkflowDefinition {
         WorkflowDefinition {
             enabled: true,
@@ -1010,6 +1125,7 @@ mod tests {
                     ConfigOutputKind::Text => value.is_string(),
                     ConfigOutputKind::Number => value.is_number(),
                     ConfigOutputKind::Toggle => value.is_boolean(),
+                    ConfigOutputKind::Json => value.is_array() || value.is_object(),
                 });
             }
         }

@@ -25,12 +25,16 @@ use snenk_bot::workflows::{
 };
 
 use crate::configuration::{
-    ConfigurationError, ConfigurationErrorCode, ConfigurationSaveResult,
-    ConfigurationSessionRequest, ConfigurationSessions, ConfigurationSnapshot, ConnectionModule,
-    LoadedConnectionSettings, OpenConfiguration, SaveConfiguration, obs_error, vtube_error,
+    ConfigurationAuthorizationIdentity, ConfigurationCredentialIdentity, ConfigurationError,
+    ConfigurationErrorCode, ConfigurationSaveResult, ConfigurationSessionRequest,
+    ConfigurationSessions, ConfigurationSnapshot, ConnectionModule, LoadedConnectionSettings,
+    OpenConfiguration, SaveConfiguration, SaveConfigurationCredential, obs_error, vtube_error,
 };
 use crate::editor::{
     EditorError, EditorErrorCode, EditorOperation, EditorSessions, EditorSnapshot,
+};
+use crate::events::{
+    EventCommandError, EventCommandErrorCode, EventIdentity, EventPage, ReplayEvent,
 };
 
 #[derive(Debug, Deserialize, Type)]
@@ -122,12 +126,6 @@ pub struct InspectHistory {
     pub run_id: String,
 }
 
-#[derive(Deserialize, Type)]
-#[serde(deny_unknown_fields)]
-pub struct SaveObsPassword {
-    pub password: Option<String>,
-}
-
 #[derive(Debug, Serialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialPresence {
@@ -176,6 +174,91 @@ impl DesktopBackend {
             input,
             authentication,
         }
+    }
+
+    /// Resolves an owned collection from an existing configuration session.
+    pub(crate) async fn collection_module(
+        &self,
+        session_id: String,
+        collection_id: String,
+    ) -> Result<ConnectionModule, ConfigurationError> {
+        self.ready()
+            .map_err(|_| ConfigurationError::unavailable())?
+            .configure(move |sessions| sessions.collection_module(&session_id, &collection_id))
+            .await
+    }
+
+    /// Validates a native directory control through its live configuration session.
+    pub(crate) async fn directory_field(
+        &self,
+        request: crate::directories::PickConfigurationDirectory,
+    ) -> Result<String, ConfigurationError> {
+        self.ready()
+            .map_err(|_| ConfigurationError::unavailable())?
+            .configure(move |sessions| {
+                sessions.directory_field(
+                    &request.session_id,
+                    request.collection_id.as_deref(),
+                    &request.field_path,
+                )
+            })
+            .await
+    }
+
+    /// Runs API administration in the same bounded blocking worker pool as settings saves.
+    pub(crate) async fn with_api<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(Arc<snenk_bot::api::ApiService>) -> Result<T, snenk_bot::api::ApiError>
+        + Send
+        + 'static,
+    ) -> Result<T, ConfigurationError> {
+        let ready = self
+            .ready()
+            .map_err(|_| ConfigurationError::unavailable())?;
+        let permit = Arc::clone(&ready.workers)
+            .try_acquire_owned()
+            .map_err(|_| {
+                ConfigurationError::new(
+                    ConfigurationErrorCode::Busy,
+                    "Settings are busy. Try again shortly.",
+                )
+            })?;
+        let api = Arc::clone(ready.services.api());
+        tauri::async_runtime::spawn_blocking(move || {
+            let _permit = permit;
+            operation(api).map_err(crate::configuration::api_error)
+        })
+        .await
+        .map_err(|_| ConfigurationError::unavailable())?
+    }
+
+    /// Runs provider administration independently of the optional API service.
+    pub(crate) async fn with_providers<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(
+            Arc<snenk_bot::providers::ProviderIntegration>,
+        ) -> Result<T, snenk_bot::providers::ProviderIntegrationError>
+        + Send
+        + 'static,
+    ) -> Result<T, ConfigurationError> {
+        let ready = self
+            .ready()
+            .map_err(|_| ConfigurationError::unavailable())?;
+        let permit = Arc::clone(&ready.workers)
+            .try_acquire_owned()
+            .map_err(|_| {
+                ConfigurationError::new(
+                    ConfigurationErrorCode::Busy,
+                    "Settings are busy. Try again shortly.",
+                )
+            })?;
+        let providers = Arc::clone(ready.services.providers());
+        tauri::async_runtime::spawn_blocking(move || {
+            let _permit = permit;
+            operation(providers).map_err(crate::configuration::provider_error)
+        })
+        .await
+        .map_err(|_| ConfigurationError::unavailable())?
     }
 
     fn ready(&self) -> Result<&DesktopCommands, EditorError> {
@@ -290,6 +373,12 @@ pub fn configure<R: Runtime>(
 /// Installs command dispatch before the host resolves paths and starts services.
 pub(crate) fn register_commands<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
     builder.invoke_handler(tauri::generate_handler![
+        crate::api_admin::api_history_import,
+        crate::collections::configuration_collection_load,
+        crate::collections::configuration_collection_create,
+        crate::collections::configuration_collection_remove,
+        crate::collections::configuration_collection_action,
+        crate::directories::configuration_pick_directory,
         desktop_snapshot,
         dismiss_error,
         submit_input,
@@ -305,13 +394,18 @@ pub(crate) fn register_commands<R: Runtime>(builder: tauri::Builder<R>) -> tauri
         action_schemas,
         action_definitions,
         action_choices,
+        configuration_catalog,
         configuration_open,
         configuration_save,
         configuration_close,
-        obs_password_status,
-        save_obs_password,
+        configuration_credential_status,
+        configuration_credential_save,
         history_page,
         history_inspect,
+        events_list,
+        events_inspect,
+        events_targets,
+        events_replay,
         twitch_accounts,
         twitch_login_start,
         twitch_login_approve,
@@ -319,10 +413,21 @@ pub(crate) fn register_commands<R: Runtime>(builder: tauri::Builder<R>) -> tauri
         twitch_login_open_browser,
         twitch_login_copy,
         twitch_login_snapshot,
-        vtube_authorization_status,
-        authorize_vtube,
-        forget_vtube_authorization,
+        configuration_authorization_status,
+        configuration_authorize,
+        configuration_forget_authorization,
     ])
+}
+
+/// Lists native configuration targets and their persisted setup state.
+#[tauri::command]
+fn configuration_catalog(
+    state: State<'_, DesktopBackend>,
+) -> Result<Vec<crate::configuration::ConfigurationCatalogEntry>, ConfigurationError> {
+    let ready = state
+        .ready()
+        .map_err(|_| ConfigurationError::unavailable())?;
+    Ok(crate::configuration::configuration_catalog(&ready.services))
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Type)]
@@ -406,10 +511,20 @@ pub struct TwitchAccountSummary {
 
 #[derive(Clone, Debug, Serialize, Type)]
 pub struct TwitchAccountsSnapshot {
-    pub broadcaster: Option<TwitchAccountSummary>,
-    pub bot: Option<TwitchAccountSummary>,
+    pub integration_id: String,
+    pub title: String,
+    pub account_selection_hint: String,
+    pub roles: Vec<AccountRoleSnapshot>,
 }
 
+/// One declared account role with its public connected identity, if present.
+#[derive(Clone, Debug, Serialize, Type)]
+pub struct AccountRoleSnapshot {
+    pub descriptor: snenk_bot::twitch::accounts::AccountRoleDescriptor,
+    pub account: Option<TwitchAccountSummary>,
+}
+
+/// Reads public Twitch account identities alongside integration-owned role metadata.
 #[tauri::command]
 fn twitch_accounts(
     state: State<'_, DesktopBackend>,
@@ -422,13 +537,21 @@ fn twitch_accounts(
         .accounts()
         .configured_accounts()
         .map_err(|_| AuthenticationError::unavailable())?;
-    let summary = |account: snenk_bot::twitch::accounts::AccountIdentity| TwitchAccountSummary {
-        user_id: account.user_id,
-        login: account.login,
+    let summary = |account: &snenk_bot::twitch::accounts::AccountIdentity| TwitchAccountSummary {
+        user_id: account.user_id.clone(),
+        login: account.login.clone(),
     };
     Ok(TwitchAccountsSnapshot {
-        broadcaster: accounts.broadcaster.map(summary),
-        bot: accounts.bot.map(summary),
+        integration_id: "twitch".into(),
+        title: snenk_bot::twitch::accounts::ACCOUNT_TITLE.into(),
+        account_selection_hint: snenk_bot::twitch::accounts::ACCOUNT_SELECTION_HINT.into(),
+        roles: snenk_bot::twitch::accounts::ACCOUNT_ROLES
+            .iter()
+            .map(|descriptor| AccountRoleSnapshot {
+                descriptor: *descriptor,
+                account: accounts.get(descriptor.id).map(summary),
+            })
+            .collect(),
     })
 }
 
@@ -581,13 +704,140 @@ async fn history_inspect(
         .await
 }
 
+/// Reads retained event summaries on a bounded blocking worker.
 #[tauri::command]
-fn vtube_authorization_status(
+async fn events_list(state: State<'_, DesktopBackend>) -> Result<EventPage, EventCommandError> {
+    let ready = state
+        .ready()
+        .map_err(|_| EventCommandError::unavailable())?;
+    let permit = Arc::clone(&ready.workers)
+        .try_acquire_owned()
+        .map_err(|_| {
+            EventCommandError::new(
+                EventCommandErrorCode::Busy,
+                "Events are busy. Try again shortly.",
+            )
+        })?;
+    let services = Arc::clone(&ready.services);
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        crate::events::list(&services)
+    })
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, "event list worker stopped");
+        EventCommandError::unavailable()
+    })?
+}
+
+/// Reads one account-scoped event on a bounded blocking worker.
+#[tauri::command]
+async fn events_inspect(
     state: State<'_, DesktopBackend>,
+    request: EventIdentity,
+) -> Result<snenk_bot::event_history::EventRecord, EventCommandError> {
+    let ready = state
+        .ready()
+        .map_err(|_| EventCommandError::unavailable())?;
+    let permit = Arc::clone(&ready.workers)
+        .try_acquire_owned()
+        .map_err(|_| {
+            EventCommandError::new(
+                EventCommandErrorCode::Busy,
+                "Events are busy. Try again shortly.",
+            )
+        })?;
+    let services = Arc::clone(&ready.services);
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        crate::events::inspect(&services, &request.event_id)
+    })
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, "event inspection worker stopped");
+        EventCommandError::unavailable()
+    })?
+}
+
+/// Lists named consumers and automations applicable to the selected event.
+#[tauri::command]
+async fn events_targets(
+    state: State<'_, DesktopBackend>,
+    request: EventIdentity,
+) -> Result<snenk_bot::app::EventTargetPage, EventCommandError> {
+    let ready = state
+        .ready()
+        .map_err(|_| EventCommandError::unavailable())?;
+    let permit = Arc::clone(&ready.workers)
+        .try_acquire_owned()
+        .map_err(|_| {
+            EventCommandError::new(
+                EventCommandErrorCode::Busy,
+                "Events are busy. Try again shortly.",
+            )
+        })?;
+    let _permit = permit;
+    ready
+        .services
+        .event_replay_targets(&request.event_id)
+        .map_err(|_| EventCommandError::unavailable())?
+        .await
+        .map_err(|_| EventCommandError::unavailable())?
+        .map_err(|error| EventCommandError::new(EventCommandErrorCode::InvalidRequest, &error))
+}
+
+/// Replays through ordinary ingress or only to chosen named recipients.
+#[tauri::command]
+async fn events_replay(
+    state: State<'_, DesktopBackend>,
+    request: ReplayEvent,
+) -> Result<snenk_bot::app::EventReplayResult, EventCommandError> {
+    let ready = state
+        .ready()
+        .map_err(|_| EventCommandError::unavailable())?;
+    let _permit = Arc::clone(&ready.workers)
+        .try_acquire_owned()
+        .map_err(|_| {
+            EventCommandError::new(
+                EventCommandErrorCode::Busy,
+                "Events are busy. Try again shortly.",
+            )
+        })?;
+    ready
+        .services
+        .replay_event(&request.event_id, request.targets)
+        .map_err(|error| {
+            tracing::warn!(%error, "event replay could not be queued");
+            EventCommandError::new(
+                EventCommandErrorCode::Busy,
+                "Event replay is busy. Try again shortly.",
+            )
+        })?
+        .await
+        .map_err(|_| EventCommandError::unavailable())?
+        .map_err(|error| {
+            tracing::warn!(%error, "event replay failed");
+            EventCommandError::new(EventCommandErrorCode::InvalidRequest, &error)
+        })
+}
+
+/// Reads the pairing cache only for a live session declaring this authorization.
+#[tauri::command]
+async fn configuration_authorization_status(
+    state: State<'_, DesktopBackend>,
+    request: ConfigurationAuthorizationIdentity,
 ) -> Result<CredentialPresence, ConfigurationError> {
     let ready = state
         .ready()
         .map_err(|_| ConfigurationError::unavailable())?;
+    let module = ready
+        .configure(move |sessions| {
+            sessions.authorization_module(&request.session_id, &request.authorization_id, false)
+        })
+        .await?;
+    if !matches!(module, ConnectionModule::VtubeStudio) {
+        return Err(unsupported_configuration_authorization());
+    }
     Ok(match ready.services.vtube().authorization_present() {
         Ok(true) => CredentialPresence::Stored,
         Ok(false) => CredentialPresence::Empty,
@@ -595,12 +845,23 @@ fn vtube_authorization_status(
     })
 }
 
-/// This is invoked only by an explicit control; VTube Studio may show its approval prompt.
+/// Starts the declared pairing operation only after its saved prerequisite is met.
 #[tauri::command]
-async fn authorize_vtube(state: State<'_, DesktopBackend>) -> Result<(), ConfigurationError> {
+async fn configuration_authorize(
+    state: State<'_, DesktopBackend>,
+    request: ConfigurationAuthorizationIdentity,
+) -> Result<(), ConfigurationError> {
     let ready = state
         .ready()
         .map_err(|_| ConfigurationError::unavailable())?;
+    let module = ready
+        .configure(move |sessions| {
+            sessions.authorization_module(&request.session_id, &request.authorization_id, true)
+        })
+        .await?;
+    if !matches!(module, ConnectionModule::VtubeStudio) {
+        return Err(unsupported_configuration_authorization());
+    }
     let _permit = Arc::clone(&ready.workers)
         .try_acquire_owned()
         .map_err(|_| {
@@ -624,12 +885,21 @@ async fn authorize_vtube(state: State<'_, DesktopBackend>) -> Result<(), Configu
 }
 
 #[tauri::command]
-async fn forget_vtube_authorization(
+async fn configuration_forget_authorization(
     state: State<'_, DesktopBackend>,
+    request: ConfigurationAuthorizationIdentity,
 ) -> Result<(), ConfigurationError> {
     let ready = state
         .ready()
         .map_err(|_| ConfigurationError::unavailable())?;
+    let module = ready
+        .configure(move |sessions| {
+            sessions.authorization_module(&request.session_id, &request.authorization_id, false)
+        })
+        .await?;
+    if !matches!(module, ConnectionModule::VtubeStudio) {
+        return Err(unsupported_configuration_authorization());
+    }
     let _permit = Arc::clone(&ready.workers)
         .try_acquire_owned()
         .map_err(|_| {
@@ -652,48 +922,118 @@ async fn forget_vtube_authorization(
         })
 }
 
-#[tauri::command]
-fn obs_password_status(
-    state: State<'_, DesktopBackend>,
-) -> Result<CredentialPresence, ConfigurationError> {
-    let services = &state
-        .ready()
-        .map_err(|_| ConfigurationError::unavailable())?
-        .services;
-    Ok(match services.obs().password_present() {
-        Ok(true) => CredentialPresence::Stored,
-        Ok(false) => CredentialPresence::Empty,
-        Err(_) => CredentialPresence::Unavailable,
-    })
+fn unsupported_configuration_authorization() -> ConfigurationError {
+    ConfigurationError::new(
+        ConfigurationErrorCode::InvalidValues,
+        "This settings view has no supported authorization.",
+    )
 }
 
+/// Reads only the credential declared by an open settings session.
 #[tauri::command]
-async fn save_obs_password(
+async fn configuration_credential_status(
     state: State<'_, DesktopBackend>,
-    request: SaveObsPassword,
+    request: ConfigurationCredentialIdentity,
 ) -> Result<CredentialPresence, ConfigurationError> {
     let ready = state
         .ready()
         .map_err(|_| ConfigurationError::unavailable())?;
-    let _permit = Arc::clone(&ready.workers)
-        .try_acquire_owned()
-        .map_err(|_| {
-            ConfigurationError::new(
-                ConfigurationErrorCode::Busy,
-                "Connection settings are busy. Try again shortly.",
-            )
-        })?;
-    ready
-        .services
-        .save_obs_password_typed(request.password)
-        .map_err(|_| ConfigurationError::unavailable())?
-        .await
-        .map_err(|_| ConfigurationError::unavailable())?
-        .map_err(obs_error)?;
-    Ok(match ready.services.obs().password_present() {
+    let module = ready
+        .configure(move |sessions| {
+            sessions.credential_module(&request.session_id, &request.credential_id)
+        })
+        .await?;
+    match module {
+        ConnectionModule::Obs => Ok(obs_credential_presence(ready)),
+        ConnectionModule::Steamgriddb => {
+            state
+                .with_providers(|providers| {
+                    Ok(if providers.key_present()? {
+                        CredentialPresence::Stored
+                    } else {
+                        CredentialPresence::Empty
+                    })
+                })
+                .await
+        }
+        _ => Err(unsupported_configuration_credential()),
+    }
+}
+
+/// Saves only the credential declared by an open settings session.
+#[tauri::command]
+async fn configuration_credential_save(
+    state: State<'_, DesktopBackend>,
+    request: SaveConfigurationCredential,
+) -> Result<CredentialPresence, ConfigurationError> {
+    let ready = state
+        .ready()
+        .map_err(|_| ConfigurationError::unavailable())?;
+    let session_id = request.session_id.clone();
+    let credential_id = request.credential_id.clone();
+    let module = ready
+        .configure(move |sessions| sessions.credential_module(&session_id, &credential_id))
+        .await?;
+    match module {
+        ConnectionModule::Obs => {
+            let password = obs_password_for_save(request.value)?;
+            let _permit = Arc::clone(&ready.workers)
+                .try_acquire_owned()
+                .map_err(|_| {
+                    ConfigurationError::new(
+                        ConfigurationErrorCode::Busy,
+                        "Connection settings are busy. Try again shortly.",
+                    )
+                })?;
+            ready
+                .services
+                .save_obs_password_typed(Some(password))
+                .map_err(|_| ConfigurationError::unavailable())?
+                .await
+                .map_err(|_| ConfigurationError::unavailable())?
+                .map_err(obs_error)?;
+            Ok(obs_credential_presence(ready))
+        }
+        ConnectionModule::Steamgriddb => {
+            state
+                .with_providers(move |providers| {
+                    providers.set_key(request.value.as_deref())?;
+                    Ok(if request.value.is_some() {
+                        CredentialPresence::Stored
+                    } else {
+                        CredentialPresence::Empty
+                    })
+                })
+                .await
+        }
+        _ => Err(unsupported_configuration_credential()),
+    }
+}
+
+/// OBS presence reads the startup credential cache, never the system keyring.
+fn obs_credential_presence(ready: &DesktopCommands) -> CredentialPresence {
+    match ready.services.obs().password_present() {
         Ok(true) => CredentialPresence::Stored,
         Ok(false) => CredentialPresence::Empty,
         Err(_) => CredentialPresence::Unavailable,
+    }
+}
+
+/// No other configuration module currently declares a native credential.
+fn unsupported_configuration_credential() -> ConfigurationError {
+    ConfigurationError::new(
+        ConfigurationErrorCode::InvalidValues,
+        "This settings view has no supported credential.",
+    )
+}
+
+/// The OBS editor intentionally offers replacement without a removal control.
+fn obs_password_for_save(value: Option<String>) -> Result<String, ConfigurationError> {
+    value.ok_or_else(|| {
+        ConfigurationError::new(
+            ConfigurationErrorCode::InvalidValues,
+            "OBS password removal is unavailable.",
+        )
     })
 }
 
@@ -708,21 +1048,63 @@ async fn configuration_open(
     let services = Arc::clone(&ready.services);
     ready
         .configure(move |sessions| {
-            let loaded = match request.module {
-                ConnectionModule::Obs => LoadedConnectionSettings::Obs(
+            let loaded = match (request.module, request.record_id.as_deref()) {
+                (ConnectionModule::Api, Some(id)) => LoadedConnectionSettings::ApiConsumer(
+                    services
+                        .api()
+                        .consumer_configuration(id)
+                        .map_err(crate::configuration::api_error)?,
+                ),
+                (ConnectionModule::Api, None) => LoadedConnectionSettings::Api(
+                    services
+                        .api()
+                        .configuration()
+                        .map_err(crate::configuration::api_error)?,
+                ),
+                (ConnectionModule::Steamgriddb, None) => LoadedConnectionSettings::Steamgriddb(
+                    snenk_bot::providers::SteamGridDbSettings {
+                        enabled: services
+                            .providers()
+                            .enabled(snenk_bot::providers::ProviderId::SteamGridDb)
+                            .map_err(crate::configuration::provider_error)?,
+                    },
+                ),
+                (ConnectionModule::Emotes, None) => {
+                    LoadedConnectionSettings::Emotes(snenk_bot::providers::EmotesSettings {
+                        enabled: services
+                            .providers()
+                            .enabled(snenk_bot::providers::ProviderId::Emotes)
+                            .map_err(crate::configuration::provider_error)?,
+                    })
+                }
+                (ConnectionModule::Pronouns, None) => {
+                    LoadedConnectionSettings::Pronouns(snenk_bot::providers::PronounsSettings {
+                        enabled: services
+                            .providers()
+                            .enabled(snenk_bot::providers::ProviderId::Pronouns)
+                            .map_err(crate::configuration::provider_error)?,
+                    })
+                }
+                (ConnectionModule::Obs, None) => LoadedConnectionSettings::Obs(
                     services
                         .obs()
                         .settings()
                         .load()
                         .map_err(|error| obs_error(error.into()))?,
                 ),
-                ConnectionModule::VtubeStudio => LoadedConnectionSettings::VtubeStudio(
+                (ConnectionModule::VtubeStudio, None) => LoadedConnectionSettings::VtubeStudio(
                     services
                         .vtube()
                         .settings()
                         .load()
                         .map_err(|error| vtube_error(error.into()))?,
                 ),
+                (_, Some(_)) => {
+                    return Err(ConfigurationError::new(
+                        ConfigurationErrorCode::InvalidValues,
+                        "This connection does not have editable records.",
+                    ));
+                }
             };
             sessions.open(loaded)
         })
@@ -989,6 +1371,19 @@ fn save_error(error: WorkflowSaveError) -> EditorError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A missing OBS value cannot clear the stored password through this editor.
+    #[test]
+    fn obs_credential_cannot_be_removed_through_shared_save_command() {
+        assert_eq!(
+            obs_password_for_save(Some("saved".into())).unwrap(),
+            "saved"
+        );
+        assert_eq!(
+            obs_password_for_save(None).unwrap_err().code,
+            ConfigurationErrorCode::InvalidValues
+        );
+    }
 
     #[test]
     fn startup_failure_remains_readable_without_admitting_application_commands() {

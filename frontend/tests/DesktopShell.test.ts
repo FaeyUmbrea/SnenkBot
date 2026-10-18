@@ -109,7 +109,9 @@ describe('Connection status', () => {
 		expect(view.container.querySelector('details')).toHaveProperty('open', true);
 		expect(view.getByText('Twitch Broadcaster Account')).toBeTruthy();
 		expect(view.getByText('Reconnect for ad events')).toBeTruthy();
-		await fireEvent.click(view.getAllByRole('button', { name: 'Configure' })[1]);
+		await fireEvent.click(
+			view.getByRole('button', { name: 'Configure Twitch Broadcaster Account' })
+		);
 		expect(onConfigure).toHaveBeenCalledWith(connections[1]);
 		expect(view.container.querySelector('details')).toHaveProperty('open', false);
 		await fireEvent.click(summary);
@@ -119,5 +121,34 @@ describe('Connection status', () => {
 		await fireEvent.click(summary);
 		await fireEvent.pointerDown(document.body);
 		expect(view.container.querySelector('details')).toHaveProperty('open', false);
+	});
+	it('keeps healthy rows compact while showing error detail and recovery prompts', async () => {
+		const view = render(ConnectionStatus, {
+			connections: [
+				connections[0],
+				{
+					...connections[1],
+					state: 'error' as const,
+					detail: 'Reconnect the broadcaster account.'
+				}
+			],
+			requests: [
+				{
+					integration: 'twitch',
+					connection: 'broadcaster',
+					reason: 'Ad events need new permission',
+					affected_features: []
+				}
+			],
+			onConfigure: vi.fn()
+		});
+		await fireEvent.click(view.getByLabelText('Connections: 1 of 2 connected'));
+		expect(view.queryByText('Recording')).toBeNull();
+		expect(view.getByText('Reconnect the broadcaster account.')).toBeTruthy();
+		expect(view.getByText('Ad events need new permission')).toBeTruthy();
+		const healthy = view.getByText('OBS Studio').closest('li');
+		expect(healthy?.textContent).toMatch(/OBS Studio\s+Connected/);
+		expect(healthy?.querySelectorAll('p')).toHaveLength(0);
+		expect(view.getByRole('button', { name: 'Configure OBS Studio' })).toBeTruthy();
 	});
 });

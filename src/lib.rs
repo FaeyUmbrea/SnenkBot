@@ -1,9 +1,11 @@
 extern crate self as snenk_bot;
 
+pub mod api;
 pub mod app;
 pub mod choices;
 pub mod editor;
 pub mod engine;
+pub mod event_history;
 pub mod execution;
 pub mod history;
 pub mod integration;
@@ -11,6 +13,7 @@ pub mod lua;
 pub mod migration;
 pub mod obs;
 pub mod paths;
+pub mod providers;
 pub mod runtime;
 pub mod schema;
 pub mod storage;

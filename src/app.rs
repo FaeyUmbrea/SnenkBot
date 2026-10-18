@@ -6,8 +6,10 @@ use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot, watch};
 
+use crate::api::{ApiError, ApiService};
 use crate::choices::{ChoiceCatalog, ConfigChoice};
 use crate::engine::{ActivationOrigin, Engine, EventSink, InputProvider, Values, Workflow};
+use crate::event_history::{EventEntry, EventHistory, EventHistoryError, EventRecord, EventSource};
 use crate::execution::{CompletedRun, ExecutionStartError, WorkflowExecutor};
 use crate::history::{HistoryEntry, HistoryError, RunHistory};
 use crate::integration::{ConfigurationStatus, ConnectionStatus, ReconfigurationRequest};
@@ -15,6 +17,7 @@ use crate::lua::LuaAction;
 use crate::obs::settings::{LoadedObsSettings, ObsSettings, ObsSettingsError};
 use crate::obs::{ObsConfigurationError, ObsIntegration, routes_for};
 use crate::paths::AppPaths;
+use crate::providers::{ProviderIntegration, ProviderIntegrationError};
 use crate::runtime::{AppRuntime, RuntimeError};
 use crate::schema::{ConfigOutput, ConfigSchema};
 use crate::storage::SaveOutcome;
@@ -63,9 +66,15 @@ pub enum AppServiceError {
     #[error(transparent)]
     History(#[from] HistoryError),
     #[error(transparent)]
+    EventHistory(#[from] EventHistoryError),
+    #[error(transparent)]
     Dispatcher(#[from] ExecutionStartError),
     #[error(transparent)]
     Runtime(#[from] RuntimeError),
+    #[error(transparent)]
+    Api(#[from] ApiError),
+    #[error(transparent)]
+    Provider(#[from] ProviderIntegrationError),
     #[error("workflow `{0}` is unavailable")]
     Unavailable(String),
     #[error("workflow `{0}` is disabled")]
@@ -76,6 +85,45 @@ pub enum AppServiceError {
     Busy,
     #[error("invalid compiled configuration schema: {0}")]
     InvalidSchema(String),
+    #[error("event cannot be replayed: {0}")]
+    InvalidReplay(String),
+}
+
+/// One named recipient eligible for a selected event.
+#[derive(Clone, Debug, serde::Serialize)]
+#[cfg_attr(feature = "desktop-contracts", derive(specta::Type))]
+pub struct EventReplayTarget {
+    pub id: String,
+    pub label: String,
+    pub kind: EventReplayTargetKind,
+}
+
+/// Distinguishes a named API consumer from an automation.
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+#[cfg_attr(feature = "desktop-contracts", derive(specta::Type))]
+#[serde(rename_all = "snake_case")]
+pub enum EventReplayTargetKind {
+    Consumer,
+    Workflow,
+}
+
+/// Eligible recipients alongside nonfatal API discovery errors.
+#[derive(Clone, Debug, serde::Serialize)]
+#[cfg_attr(feature = "desktop-contracts", derive(specta::Type))]
+pub struct EventTargetPage {
+    pub targets: Vec<EventReplayTarget>,
+    pub errors: Vec<String>,
+}
+
+/// What the existing dispatch paths accepted from one replay request.
+#[derive(Clone, Debug, serde::Serialize)]
+#[cfg_attr(feature = "desktop-contracts", derive(specta::Type))]
+pub struct EventReplayResult {
+    #[cfg_attr(feature = "desktop-contracts", specta(type = specta_typescript::Number))]
+    pub workflows_started: usize,
+    pub channels_delivered: Vec<String>,
+    pub consumers_delivered: Vec<String>,
+    pub warnings: Vec<String>,
 }
 
 /// Keeps persistence conflicts distinguishable from validation and activation failures.
@@ -130,6 +178,15 @@ impl<E: std::fmt::Display> SettingsSaveReply<E> {
 enum Command {
     RunManual(String),
     RunTriggered(TriggerActivation),
+    ReplayEvent {
+        id: String,
+        targets: Option<Vec<String>>,
+        reply: oneshot::Sender<Result<EventReplayResult, String>>,
+    },
+    ReplayTargets {
+        id: String,
+        reply: oneshot::Sender<Result<EventTargetPage, String>>,
+    },
     Reload(String),
     CreateWorkflow(String, oneshot::Sender<Result<String, String>>),
     SaveWorkflow {
@@ -167,11 +224,14 @@ pub struct AppServices {
     workflows: Arc<Mutex<Vec<WorkflowStatus>>>,
     commands: mpsc::Sender<Command>,
     twitch: Arc<TwitchIntegration>,
+    api: Arc<ApiService>,
+    providers: Arc<ProviderIntegration>,
     obs: Arc<ObsIntegration>,
     vtube: Arc<VtubeIntegration>,
     action_schemas: Vec<&'static ConfigSchema>,
     action_definitions: Vec<crate::schema::ActionDefinition>,
     choices: ChoiceCatalog,
+    event_history: EventHistory,
     configuration_sources: Vec<Arc<dyn ConfigurationStatus>>,
 }
 
@@ -189,6 +249,7 @@ impl AppServices {
         let repository = WorkflowRepository::new(paths);
         let entries = repository.list_definitions()?;
         let history = RunHistory::new(paths.history_dir());
+        let event_history = EventHistory::new(paths.event_history_dir());
         for entry in history.recover()? {
             if let HistoryEntry::Corrupt { file_name, message } = entry {
                 on_error(format!(
@@ -199,7 +260,13 @@ impl AppServices {
 
         let mut engine = Engine::new(input, Arc::clone(&events));
         let mut choices = ChoiceCatalog::default();
+        let providers = ProviderIntegration::register(paths, &mut engine)?;
+        let api = ApiService::register(paths, Arc::clone(&providers), &mut engine, &mut choices);
+        if let Some(error) = api.startup_error() {
+            on_error(format!("Overlay API unavailable: {error}"));
+        }
         let twitch = Arc::new(TwitchIntegration::register(paths, &mut engine));
+        twitch.set_overlay(api.event_hub());
         let obs = ObsIntegration::register(paths, &mut engine, &mut choices);
         let vtube = VtubeIntegration::register(paths, &mut engine, &mut choices);
         engine.register_capability(
@@ -213,6 +280,7 @@ impl AppServices {
             .validate_schemas(&action_schemas)
             .map_err(AppServiceError::InvalidSchema)?;
         obs.start(runtime)?;
+        api.start(runtime)?;
         twitch.start_authorization(runtime)?;
 
         let mut workflows = Vec::with_capacity(entries.len());
@@ -264,22 +332,31 @@ impl AppServices {
         let (commands, mut receiver) = mpsc::channel(256);
         let triggered_commands = commands.clone();
         let triggered_errors = Arc::clone(&on_error);
-        obs.start_listener(runtime, move |activation| {
-            let activation = TriggerActivation {
-                workflow_id: activation.workflow_id,
-                trigger_id: activation.trigger_id,
-                values: activation.values,
-                integration: "OBS",
-            };
-            if let Err(error) = triggered_commands.try_send(Command::RunTriggered(activation)) {
-                triggered_errors(format!("OBS event could not be queued: {error}"));
-            }
-        })?;
+        obs.start_listener_with_history(
+            runtime,
+            Some(event_history.clone()),
+            move |activation| {
+                let activation = TriggerActivation {
+                    workflow_id: activation.workflow_id,
+                    trigger_id: activation.trigger_id,
+                    values: activation.values,
+                    integration: "OBS",
+                };
+                if let Err(error) = triggered_commands.try_send(Command::RunTriggered(activation)) {
+                    triggered_errors(format!("OBS event could not be queued: {error}"));
+                }
+            },
+            {
+                let errors = Arc::clone(&on_error);
+                move |error| errors(error)
+            },
+        )?;
         let twitch_commands = commands.clone();
         let twitch_errors = Arc::clone(&on_error);
         let twitch_listener_errors = Arc::clone(&on_error);
-        twitch.start_listener(
+        twitch.start_listener_with_history(
             runtime,
+            Some(event_history.clone()),
             move |activation: TwitchActivation| {
                 let activation = TriggerActivation {
                     workflow_id: activation.workflow_id,
@@ -296,8 +373,9 @@ impl AppServices {
         let vtube_commands = commands.clone();
         let vtube_errors = Arc::clone(&on_error);
         let vtube_listener_errors = Arc::clone(&on_error);
-        vtube.start_listener(
+        vtube.start_listener_with_history(
             runtime,
+            Some(event_history.clone()),
             move |activation| {
                 let activation = TriggerActivation {
                     workflow_id: activation.workflow_id,
@@ -315,6 +393,8 @@ impl AppServices {
         let worker_obs = Arc::clone(&obs);
         let worker_twitch = Arc::clone(&twitch);
         let worker_vtube = Arc::clone(&vtube);
+        let worker_api = Arc::clone(&api);
+        let worker_event_history = event_history.clone();
         runtime.spawn_task("application commands", move |shutdown| async move {
             let mut obs_settings = worker_obs.settings().load().ok();
             let mut vtube_settings = worker_vtube.settings().load().ok();
@@ -344,6 +424,57 @@ impl AppServices {
                                 ).await {
                                     on_error(format!("{} trigger `{}` could not run workflow `{}`: {error}", activation.integration, activation.trigger_id, activation.workflow_id));
                                 }
+                            }
+                            Command::ReplayTargets { id, reply } => {
+                                let history = worker_event_history.clone();
+                                let loaded = tokio::task::spawn_blocking(move || history.load(&id)).await;
+                                let result = match loaded {
+                                    Ok(Ok(record)) => {
+                                        let configured = worker_twitch.accounts().configured_accounts().ok();
+                                        let current_broadcaster = configured.as_ref().and_then(|accounts| accounts.broadcaster.as_ref().map(|account| account.user_id.clone()));
+                                        let bot_user_id = configured.as_ref().and_then(|accounts| accounts.bot.as_ref().map(|account| account.user_id.as_str()));
+                                        if record.source == EventSource::Twitch
+                                            && record.broadcaster_id != current_broadcaster {
+                                            Err("This event belongs to a different Twitch account.".to_owned())
+                                        } else {
+                                            replay_targets(&record, &definitions, &worker_api, bot_user_id)
+                                        }
+                                    }
+                                    Ok(Err(error)) => Err(error.to_string()),
+                                    Err(error) => Err(format!("event history worker stopped: {error}")),
+                                };
+                                let _ = reply.send(result);
+                            }
+                            Command::ReplayEvent { id, targets, reply } => {
+                                let history = worker_event_history.clone();
+                                let loaded = tokio::task::spawn_blocking(move || history.load(&id)).await;
+                                let result = match loaded {
+                                    Ok(Ok(record)) => {
+                                        let configured = worker_twitch.accounts().configured_accounts().ok();
+                                        let current_broadcaster = configured.as_ref().and_then(|accounts| accounts.broadcaster.as_ref().map(|account| account.user_id.clone()));
+                                        let bot_user_id = configured.as_ref().and_then(|accounts| accounts.bot.as_ref().map(|account| account.user_id.as_str()));
+                                        if record.source == EventSource::Twitch
+                                            && record.broadcaster_id != current_broadcaster {
+                                            Err("This event belongs to a different Twitch account.".to_owned())
+                                        } else {
+                                            replay_record(
+                                                &record,
+                                                targets,
+                                                ReplayContext {
+                                                    definitions: &definitions,
+                                                    executor: &executor,
+                                                    api: &worker_api,
+                                                    bot_user_id,
+                                                    shutdown: &shutdown,
+                                                    on_error: on_error.as_ref(),
+                                                },
+                                            ).await
+                                        }
+                                    }
+                                    Ok(Err(error)) => Err(error.to_string()),
+                                    Err(error) => Err(format!("event history worker stopped: {error}")),
+                                };
+                                let _ = reply.send(result);
                             }
                             Command::CreateWorkflow(name, reply) => {
                                 let create_repository = repository.clone();
@@ -524,18 +655,26 @@ impl AppServices {
             }
             Ok::<(), std::convert::Infallible>(())
         })?;
-        let configuration_sources: Vec<Arc<dyn ConfigurationStatus>> =
-            vec![twitch.clone(), obs.clone(), vtube.clone()];
+        let configuration_sources: Vec<Arc<dyn ConfigurationStatus>> = vec![
+            twitch.clone(),
+            obs.clone(),
+            vtube.clone(),
+            providers.clone(),
+            api.clone(),
+        ];
         Ok(Self {
             configuration_sources,
             workflows,
             commands,
             twitch,
+            api,
+            providers,
             obs,
             vtube,
             action_schemas,
             action_definitions,
             choices,
+            event_history,
         })
     }
 
@@ -559,6 +698,87 @@ impl AppServices {
             .iter()
             .flat_map(|source| source.subscribe_configuration_changes())
             .collect()
+    }
+
+    /// Returns API settings and consumer administration services.
+    pub fn api(&self) -> &Arc<ApiService> {
+        &self.api
+    }
+
+    /// Gives the desktop bridge read access to received integration events.
+    pub fn event_history(&self) -> &EventHistory {
+        &self.event_history
+    }
+
+    /// Lists local events and events for the currently configured broadcaster.
+    pub fn event_entries(&self) -> Result<Vec<EventEntry>, AppServiceError> {
+        let broadcaster_id = self.current_broadcaster_id();
+        Ok(self
+            .event_history
+            .entries()?
+            .into_iter()
+            .filter(|entry| match entry {
+                EventEntry::Record(record) => {
+                    record.source != EventSource::Twitch
+                        || record.broadcaster_id.as_deref() == broadcaster_id.as_deref()
+                }
+                EventEntry::Corrupt { .. } => true,
+            })
+            .collect())
+    }
+
+    /// Loads an event only while its Twitch broadcaster is still the configured account.
+    pub fn event_record(&self, id: &str) -> Result<EventRecord, AppServiceError> {
+        let record = self.event_history.load(id)?;
+        if record.source == EventSource::Twitch
+            && record.broadcaster_id != self.current_broadcaster_id()
+        {
+            return Err(EventHistoryError::NotFound.into());
+        }
+        Ok(record)
+    }
+
+    /// Lists named consumers and automations eligible for a selected event.
+    pub fn event_replay_targets(
+        &self,
+        id: &str,
+    ) -> Result<oneshot::Receiver<Result<EventTargetPage, String>>, AppServiceError> {
+        let (reply, receiver) = oneshot::channel();
+        self.send(Command::ReplayTargets {
+            id: id.to_owned(),
+            reply,
+        })?;
+        Ok(receiver)
+    }
+
+    /// Replays normally, or only to the selected named recipients.
+    pub fn replay_event(
+        &self,
+        id: &str,
+        targets: Option<Vec<String>>,
+    ) -> Result<oneshot::Receiver<Result<EventReplayResult, String>>, AppServiceError> {
+        let (reply, receiver) = oneshot::channel();
+        self.send(Command::ReplayEvent {
+            id: id.to_owned(),
+            targets,
+            reply,
+        })?;
+        Ok(receiver)
+    }
+
+    /// Reads the current Twitch account boundary without starting authorization.
+    fn current_broadcaster_id(&self) -> Option<String> {
+        self.twitch
+            .accounts()
+            .configured_accounts()
+            .ok()?
+            .broadcaster
+            .map(|account| account.user_id)
+    }
+
+    /// Returns the compiled public-data providers.
+    pub fn providers(&self) -> &Arc<ProviderIntegration> {
+        &self.providers
     }
 
     pub fn twitch(&self) -> &TwitchIntegration {
@@ -766,6 +986,291 @@ impl AppServices {
                 mpsc::error::TrySendError::Closed(_) => AppServiceError::Stopped,
             })
     }
+}
+
+/// A decoded stored event, kept in its integration's existing routing type.
+enum ReplayedEvent {
+    Twitch {
+        event: crate::twitch::events::TwitchEvent,
+        envelope: serde_json::Value,
+    },
+    Obs(obws::events::Event),
+    Vtube(vtubestudio::data::Event),
+}
+
+/// Lists only current recipients that can handle this event through existing routes or grants.
+fn replay_targets(
+    record: &EventRecord,
+    definitions: &BTreeMap<String, WorkflowDefinition>,
+    api: &ApiService,
+    bot_user_id: Option<&str>,
+) -> Result<EventTargetPage, String> {
+    let event = decode_record(record)?;
+    let mut targets = Vec::new();
+    let mut errors = Vec::new();
+    if let ReplayedEvent::Twitch { event, .. } = &event {
+        let channels = crate::api::EventHub::replay_channels(event);
+        if !channels.is_empty() {
+            match api.configuration() {
+                Ok(settings) if settings.enabled => match api.list_consumers() {
+                    Ok(consumers) => {
+                        for consumer in consumers {
+                            if channels
+                                .iter()
+                                .any(|channel| consumer.permissions.channels.contains(*channel))
+                            {
+                                targets.push(EventReplayTarget {
+                                    id: format!("consumer:{}", consumer.id),
+                                    label: consumer.name,
+                                    kind: EventReplayTargetKind::Consumer,
+                                });
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        errors.push(format!("API consumers could not be listed: {error}"))
+                    }
+                },
+                Ok(_) => {}
+                Err(error) => errors.push(format!("API configuration could not be read: {error}")),
+            }
+        }
+    }
+    let mut workflow_ids = std::collections::BTreeSet::new();
+    for activation in replay_activations(&event, definitions, bot_user_id) {
+        if workflow_ids.insert(activation.workflow_id.clone()) {
+            let definition = &definitions[&activation.workflow_id];
+            targets.push(EventReplayTarget {
+                id: format!("workflow:{}", activation.workflow_id),
+                label: definition
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| activation.workflow_id.clone()),
+                kind: EventReplayTargetKind::Workflow,
+            });
+        }
+    }
+    Ok(EventTargetPage { targets, errors })
+}
+
+/// Rejects stale, duplicate, or empty recipient choices before replay has any effect.
+fn selected_recipients(
+    selected_targets: Option<Vec<String>>,
+    eligible: &[EventReplayTarget],
+) -> Result<Option<std::collections::BTreeSet<String>>, String> {
+    let Some(targets) = selected_targets else {
+        return Ok(None);
+    };
+    let known: std::collections::BTreeSet<_> =
+        eligible.iter().map(|target| target.id.as_str()).collect();
+    let unique: std::collections::BTreeSet<_> = targets.iter().collect();
+    if targets.is_empty()
+        || unique.len() != targets.len()
+        || targets
+            .iter()
+            .any(|target| !known.contains(target.as_str()))
+    {
+        return Err("Choose one or more eligible recipients".into());
+    }
+    Ok(Some(targets.into_iter().collect()))
+}
+
+/// Delegates stored payload reconstruction to the receiving integration.
+fn decode_record(record: &EventRecord) -> Result<ReplayedEvent, String> {
+    let payload = record
+        .payload
+        .clone()
+        .ok_or("This event has no replayable payload")?;
+    match record.source {
+        EventSource::Twitch => {
+            let event = crate::twitch::events::decode_record_payload(
+                &record.name,
+                record.broadcaster_id.as_deref(),
+                payload.clone(),
+            )?;
+            Ok(ReplayedEvent::Twitch {
+                event,
+                envelope: payload,
+            })
+        }
+        EventSource::Obs => {
+            crate::obs::events::decode_record_payload(&record.name, payload).map(ReplayedEvent::Obs)
+        }
+        EventSource::VtubeStudio => {
+            crate::vtube::decode_record_payload(&record.name, payload).map(ReplayedEvent::Vtube)
+        }
+    }
+}
+
+/// Produces the same trigger values as each integration's live routing path.
+fn replay_activations(
+    event: &ReplayedEvent,
+    definitions: &BTreeMap<String, WorkflowDefinition>,
+    bot_user_id: Option<&str>,
+) -> Vec<TriggerActivation> {
+    let definitions: Vec<_> = definitions.values().cloned().collect();
+    match event {
+        ReplayedEvent::Twitch { event, .. } => crate::twitch::events::route_event(
+            event,
+            &definitions,
+            crate::twitch::events::RouteOptions { bot_user_id },
+        )
+        .into_iter()
+        .map(|route| TriggerActivation {
+            workflow_id: route.workflow_id,
+            trigger_id: route.trigger_id,
+            values: route.values,
+            integration: "Twitch",
+        })
+        .collect(),
+        ReplayedEvent::Obs(event) => {
+            let routes: Vec<_> = definitions
+                .iter()
+                .flat_map(crate::obs::routes_for)
+                .collect();
+            crate::obs::events::activations(&routes, event)
+                .into_iter()
+                .map(|route| TriggerActivation {
+                    workflow_id: route.workflow_id,
+                    trigger_id: route.trigger_id,
+                    values: route.values,
+                    integration: "OBS",
+                })
+                .collect()
+        }
+        ReplayedEvent::Vtube(event) => {
+            let routes: Vec<_> = definitions
+                .iter()
+                .flat_map(crate::vtube::routes_for)
+                .collect();
+            crate::vtube::routes::activations(&routes, event)
+                .into_iter()
+                .map(|route| TriggerActivation {
+                    workflow_id: route.workflow_id,
+                    trigger_id: route.trigger_id,
+                    values: route.values,
+                    integration: "VTube Studio",
+                })
+                .collect()
+        }
+    }
+}
+
+/// Current services and account identity used by one replay request.
+struct ReplayContext<'a> {
+    definitions: &'a BTreeMap<String, WorkflowDefinition>,
+    executor: &'a WorkflowExecutor,
+    api: &'a Arc<ApiService>,
+    bot_user_id: Option<&'a str>,
+    shutdown: &'a tokio_util::sync::CancellationToken,
+    on_error: &'a (dyn Fn(String) + Send + Sync),
+}
+
+/// Sends a stored event through current routing without revisiting the capture hooks.
+async fn replay_record(
+    record: &EventRecord,
+    selected_targets: Option<Vec<String>>,
+    context: ReplayContext<'_>,
+) -> Result<EventReplayResult, String> {
+    let ReplayContext {
+        definitions,
+        executor,
+        api,
+        bot_user_id,
+        shutdown,
+        on_error,
+    } = context;
+    let event = decode_record(record)?;
+    let eligible = replay_targets(record, definitions, api, bot_user_id)?;
+    let selected = selected_recipients(selected_targets, &eligible.targets)?;
+    let mut result = EventReplayResult {
+        workflows_started: 0,
+        channels_delivered: Vec::new(),
+        consumers_delivered: Vec::new(),
+        warnings: Vec::new(),
+    };
+    if let ReplayedEvent::Twitch { event, envelope } = &event {
+        let channels = crate::api::EventHub::replay_channels(event);
+        if let Some(selected) = &selected {
+            let consumers = if selected
+                .iter()
+                .any(|target| target.starts_with("consumer:"))
+            {
+                api.list_consumers().map_err(|error| error.to_string())?
+            } else {
+                Vec::new()
+            };
+            for target in selected
+                .iter()
+                .filter_map(|target| target.strip_prefix("consumer:"))
+            {
+                let consumer = consumers
+                    .iter()
+                    .find(|consumer| consumer.id == target)
+                    .ok_or("Selected consumer is no longer available")?;
+                for channel in channels
+                    .iter()
+                    .filter(|channel| consumer.permissions.channels.contains(**channel))
+                {
+                    api.event_hub()
+                        .replay_twitch_consumer(event, envelope, channel, target)
+                        .map_err(|error| format!("Consumer replay failed: {error}"))?;
+                }
+                result.consumers_delivered.push(target.to_owned());
+            }
+        } else {
+            let api_enabled = match api.configuration() {
+                Ok(settings) => settings.enabled,
+                Err(error) => {
+                    let message = format!("API event replay unavailable: {error}");
+                    on_error(message.clone());
+                    result.warnings.push(message);
+                    false
+                }
+            };
+            for channel in channels.iter().filter(|_| api_enabled) {
+                match api
+                    .event_hub()
+                    .replay_twitch_channel(event, envelope, channel)
+                {
+                    Ok(()) => result.channels_delivered.push((*channel).to_owned()),
+                    Err(error) => {
+                        let message = format!("API channel replay failed: {error}");
+                        on_error(message.clone());
+                        result.warnings.push(message);
+                    }
+                }
+            }
+        }
+    }
+    let activations = replay_activations(&event, definitions, bot_user_id);
+    for activation in activations {
+        if selected.as_ref().is_some_and(|targets| {
+            !targets.contains(&format!("workflow:{}", activation.workflow_id))
+        }) {
+            continue;
+        }
+        match executor
+            .admit(
+                &activation.workflow_id,
+                activation.values,
+                shutdown.child_token(),
+                ActivationOrigin::Event(activation.trigger_id.clone()),
+            )
+            .await
+        {
+            Ok(()) => result.workflows_started += 1,
+            Err(error) => {
+                let message = format!(
+                    "{} trigger `{}` could not run workflow `{}`: {error}",
+                    activation.integration, activation.trigger_id, activation.workflow_id
+                );
+                on_error(message.clone());
+                result.warnings.push(message);
+            }
+        }
+    }
+    Ok(result)
 }
 
 fn workflow_trigger_summary(definition: &WorkflowDefinition) -> String {
@@ -1056,6 +1561,112 @@ mod tests {
     use crate::workflows::{
         TriggerDefinition, TriggerKind as WorkflowTriggerKind, WorkflowDefinition,
     };
+
+    #[test]
+    fn selected_recipients_reject_stale_and_duplicate_ids() {
+        let eligible = vec![EventReplayTarget {
+            id: "workflow:one".into(),
+            label: "One".into(),
+            kind: EventReplayTargetKind::Workflow,
+        }];
+        assert!(selected_recipients(Some(Vec::new()), &eligible).is_err());
+        assert!(selected_recipients(Some(vec!["workflow:gone".into()]), &eligible).is_err());
+        assert!(
+            selected_recipients(
+                Some(vec!["workflow:one".into(), "workflow:one".into()]),
+                &eligible
+            )
+            .is_err()
+        );
+        assert_eq!(
+            selected_recipients(Some(vec!["workflow:one".into()]), &eligible)
+                .unwrap()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn vtube_event_round_trips_through_protocol_decoder() {
+        let original = vtubestudio::data::Event::ModelLoaded(vtubestudio::data::ModelLoadedEvent {
+            model_loaded: true,
+            model_name: "Avatar".into(),
+            model_id: "model".into(),
+        });
+        let record = EventRecord {
+            id: "test".into(),
+            received_at_ms: 1,
+            source: EventSource::VtubeStudio,
+            name: crate::vtube::event_type_name(&original).into(),
+            broadcaster_id: None,
+            payload: Some(serde_json::to_value(&original).unwrap()),
+        };
+        assert!(
+            matches!(decode_record(&record), Ok(ReplayedEvent::Vtube(vtubestudio::data::Event::ModelLoaded(data))) if data.model_name == "Avatar")
+        );
+    }
+
+    #[test]
+    fn replay_routing_filters_notices_from_current_bot_account() {
+        let payload = serde_json::json!({
+            "payload": {
+                "subscription": {"type":"channel.chat.notification","version":"1"},
+                "event": {
+                    "broadcaster_user_id":"100", "broadcaster_user_login":"owner", "broadcaster_user_name":"Owner",
+                    "chatter_user_id":"bot-9", "chatter_user_login":"bot", "chatter_user_name":"Bot",
+                    "notice_type":"resub", "message_id":"notice-1", "message":{"text":""}, "is_source_only":false
+                }
+            }
+        });
+        let record = EventRecord {
+            id: "test".into(),
+            received_at_ms: 1,
+            source: EventSource::Twitch,
+            name: "channel.chat.notification".into(),
+            broadcaster_id: Some("100".into()),
+            payload: Some(payload),
+        };
+        let event = decode_record(&record).unwrap();
+        let mut definition = WorkflowDefinition::manual(Workflow {
+            id: "notice-workflow".into(),
+            revision: 1,
+            overlap: false,
+            steps: Vec::new(),
+            outputs: BTreeMap::new(),
+        });
+        definition.triggers = vec![TriggerDefinition {
+            id: "notice".into(),
+            enabled: true,
+            kind: WorkflowTriggerKind::IntegrationEvent {
+                integration: "twitch".into(),
+                event: "chat.notification".into(),
+                filters: BTreeMap::new(),
+            },
+        }];
+        let definitions = BTreeMap::from([(definition.workflow.id.clone(), definition)]);
+        assert!(replay_activations(&event, &definitions, Some("bot-9")).is_empty());
+        assert_eq!(replay_activations(&event, &definitions, None).len(), 1);
+    }
+
+    /// Stored metadata cannot redirect a replay to another Twitch account.
+    #[test]
+    fn replay_rejects_tampered_twitch_identity() {
+        let record = EventRecord {
+            id: "test".into(),
+            received_at_ms: 1,
+            source: EventSource::Twitch,
+            name: "channel.subscribe".into(),
+            broadcaster_id: Some("100".into()),
+            payload: Some(serde_json::json!({
+                "payload": {
+                    "subscription": {"type":"channel.subscribe","version":"1"},
+                    "event": {"broadcaster_user_id":"200"}
+                }
+            })),
+        };
+        assert!(decode_record(&record).is_err());
+    }
 
     struct TestInput;
 

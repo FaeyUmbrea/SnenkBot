@@ -16,13 +16,22 @@ On macOS, place **SnenkBot.app** in Applications. Public macOS builds are not ye
 
 ## Getting started
 
-Open the app and configure the integrations you use:
+Open **Settings** and choose a category. Connection and provider settings stay available even before you configure them; open an entry to set it up or change it:
 
+- **General:** open **API server** to configure the listener and its **Consumers** section to manage named clients.
 - **Streaming Services:** sign in to Twitch with your broadcaster account and, optionally, a separate bot account.
-- **Broadcast Apps:** enable OBS Studio and enter its WebSocket address and password.
-- **Devices & Tools:** configure and authorize VTube Studio if you use it.
+- **Broadcast Apps:** enable OBS Studio, enter its WebSocket address, and save its password in the separate credential field.
+- **Devices & Tools:** configure VTube Studio and the lookup providers you use. SteamGridDB has its own key field for artwork operations.
 
-Use **Automations** to create workflows and **Run History** to inspect their results. Credentials stay in your operating system's credential store; workflow data is saved locally.
+Use **Automations** to create workflows, **Events** to inspect received events, and **Run History** to inspect automation results. Connection settings use the same field controls across integrations. Credentials stay in your operating system's credential store; workflow data is saved locally.
+
+The **Events** tab keeps recent received Twitch, OBS Studio, and VTube Studio events, excluding chat messages. **Replay** sends an event through its current automation and overlay dispatch paths. **Replay to…** lets you choose applicable named automations and overlay consumers for that event.
+
+## Overlay API
+
+The optional local API lets an overlay or other named consumer receive Twitch events, keep its own settings, and use enabled lookup providers. Open **Settings → General → API server** to choose a host and port and enable the listener. In its **Consumers** section, choose **Add consumer** and grant each client only the channels and provider operations it needs. Add browser origins and any secret permission names as individual entries. You can edit an existing consumer without replacing its token. Copy a newly created consumer's bearer token when it appears; the app cannot show it again. Support-event recording is a separate switch and is off by default.
+
+See the [Overlay API reference](docs/overlay-api.md) for connection examples, permissions, history import, and recovery.
 
 ## Contributing
 

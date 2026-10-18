@@ -111,7 +111,7 @@ describe('IntegrationOverview', () => {
 		expect(view.getAllByText('Next feature')).toHaveLength(50);
 	});
 
-	it('shows only matching connection statuses and the configured empty state', () => {
+	it('shows matching connections and omits status for unconfigured integrations', async () => {
 		const view = render(IntegrationOverview, {
 			integration: 'obs',
 			connections: [connection('obs', 'stream', 'connecting'), connection('vtube_studio', 'model')],
@@ -123,9 +123,32 @@ describe('IntegrationOverview', () => {
 		expect(view.getByText('Connecting')).toBeTruthy();
 		expect(view.queryByText('Friendly model')).toBeNull();
 		expect(view.queryByText('No connection configured.')).toBeNull();
-		expect(view.getByText('No automations use this integration yet.')).toBeTruthy();
+		expect(view.queryByRole('region', { name: 'Used by' })).toBeNull();
 
-		view.rerender({ integration: 'vtube_studio', connections: [], workflows: [], onOpen: vi.fn() });
-		expect(view.getByText('No connection configured.')).toBeTruthy();
+		await view.rerender({
+			integration: 'vtube_studio',
+			connections: [],
+			workflows: [],
+			onOpen: vi.fn()
+		});
+		expect(view.queryByRole('region', { name: 'Connection' })).toBeNull();
+		expect(view.queryByText('No connection configured.')).toBeNull();
+	});
+	it('hides routine connection detail but keeps failure context visible', async () => {
+		const view = render(IntegrationOverview, {
+			integration: 'obs',
+			connections: [connection('obs', 'main')],
+			workflows: [],
+			onOpen: vi.fn()
+		});
+		expect(view.getByText('Connected')).toBeTruthy();
+		expect(view.queryByText('Local connection detail')).toBeNull();
+		await view.rerender({
+			integration: 'obs',
+			connections: [connection('obs', 'main', 'error')],
+			workflows: [],
+			onOpen: vi.fn()
+		});
+		expect(view.getByText('Local connection detail')).toBeTruthy();
 	});
 });

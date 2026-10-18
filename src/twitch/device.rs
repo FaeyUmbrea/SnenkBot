@@ -14,6 +14,7 @@ pub const CLIENT_ID: &str = "cz0oehy4mmuoqdropk5m12du03lhxv";
 const DEVICE_URL: &str = "https://id.twitch.tv/oauth2/device";
 const TOKEN_URL: &str = "https://id.twitch.tv/oauth2/token";
 const VALIDATE_URL: &str = "https://id.twitch.tv/oauth2/validate";
+const ACTIVATION_URL: &str = "https://www.twitch.tv/activate";
 const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 
 /// The authorization attempt to show in the UI. Keep this value for both Open
@@ -237,16 +238,15 @@ impl<T: FormTransport> DeviceAuth<T> {
             serde_json::from_slice(&response.body).map_err(|_| DeviceError::InvalidResponse)?;
         if response.device_code.is_empty()
             || response.user_code.is_empty()
-            || !response
-                .verification_uri
-                .starts_with("https://www.twitch.tv/")
             || response.interval == 0
             || response.expires_in == 0
         {
             return Err(DeviceError::InvalidResponse);
         }
+        let verification_uri =
+            trusted_activation_url(&response.verification_uri, &response.user_code)?;
         Ok(DeviceSession {
-            verification_uri: response.verification_uri,
+            verification_uri: verification_uri.into(),
             user_code: response.user_code,
             interval: Duration::from_secs(response.interval),
             expires_at: Instant::now() + Duration::from_secs(response.expires_in),
@@ -419,6 +419,33 @@ impl<T: FormTransport> DeviceAuth<T> {
     }
 }
 
+/// Accepts Twitch's optional matching device-code query, then uses the manual-code URL.
+fn trusted_activation_url(uri: &str, user_code: &str) -> Result<&'static str, DeviceError> {
+    if uri != ACTIVATION_URL && !uri.starts_with(&format!("{ACTIVATION_URL}?")) {
+        return Err(DeviceError::InvalidResponse);
+    }
+    let parsed = reqwest::Url::parse(uri).map_err(|_| DeviceError::InvalidResponse)?;
+    if parsed.scheme() != "https"
+        || parsed.host_str() != Some("www.twitch.tv")
+        || parsed.path() != "/activate"
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.port().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(DeviceError::InvalidResponse);
+    }
+    if parsed.query().is_some() {
+        let mut pairs = parsed.query_pairs();
+        if !matches!(pairs.next(), Some((key, code)) if key == "device-code" && code == user_code)
+            || pairs.next().is_some()
+        {
+            return Err(DeviceError::InvalidResponse);
+        }
+    }
+    Ok(ACTIVATION_URL)
+}
+
 fn valid_scope(scope: &str) -> bool {
     !scope.is_empty() && scope.bytes().all(|byte| byte.is_ascii_graphic())
 }
@@ -549,12 +576,12 @@ mod tests {
         }
     }
 
-    const DEVICE: &str = r#"{"device_code":"secret-code","user_code":"ABCDEFGH","verification_uri":"https://www.twitch.tv/activate?public=true&device-code=ABCDEFGH","interval":1,"expires_in":30}"#;
+    const DEVICE: &str = r#"{"device_code":"secret-code","user_code":"ABCDEFGH","verification_uri":"https://www.twitch.tv/activate?device-code=ABCDEFGH","interval":1,"expires_in":30}"#;
     const TOKENS: &str = r#"{"access_token":"secret-access","refresh_token":"secret-refresh","expires_in":14400,"scope":["chat:read"],"token_type":"bearer"}"#;
     const VALIDATED: &str = r#"{"client_id":"cz0oehy4mmuoqdropk5m12du03lhxv","user_id":"123","login":"viewer","scopes":["chat:read"],"expires_in":1200}"#;
 
     #[tokio::test]
-    async fn starts_session_with_same_user_code_as_verification_url() {
+    async fn starts_session_with_live_activation_url_normalized_for_manual_entry() {
         let mock = MockTransport::default();
         mock.push(200, DEVICE);
         let session = DeviceAuth::new(mock.clone())
@@ -562,7 +589,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(session.user_code, "ABCDEFGH");
-        assert!(session.verification_uri.contains(&session.user_code));
+        assert_eq!(session.verification_uri, ACTIVATION_URL);
         assert_eq!(session.interval, Duration::from_secs(1));
         assert!(session.expires_at > Instant::now());
         let requests = mock.requests();
@@ -573,6 +600,36 @@ mod tests {
             ("scopes".into(), "chat:read chat:edit".into())
         );
         assert!(!format!("{session:?}").contains("secret-code"));
+    }
+
+    #[tokio::test]
+    async fn rejects_untrusted_activation_urls() {
+        for uri in [
+            "http://www.twitch.tv/activate",
+            "https://www.twitch.tv.evil.example/activate",
+            "https://user@www.twitch.tv/activate",
+            "https://www.twitch.tv:443/activate",
+            "https://www.twitch.tv/activate/../activate",
+            "https://www.twitch.tv/activate#fragment",
+            "https://www.twitch.tv/activate?other=ABCDEFGH",
+            "https://www.twitch.tv/activate?device-code=WRONG",
+            "https://www.twitch.tv/activate?device-code=ABCDEFGH&other=value",
+            "https://www.twitch.tv/activate?device-code=ABCDEFGH&device-code=ABCDEFGH",
+        ] {
+            let mock = MockTransport::default();
+            let body = serde_json::json!({
+                "device_code": "secret-code",
+                "user_code": "ABCDEFGH",
+                "verification_uri": uri,
+                "interval": 1,
+                "expires_in": 30
+            });
+            mock.push(200, &body.to_string());
+            let result = DeviceAuth::new(mock)
+                .begin(&["chat:read"], &CancellationToken::new())
+                .await;
+            assert!(matches!(result, Err(DeviceError::InvalidResponse)), "{uri}");
+        }
     }
 
     #[tokio::test(start_paused = true)]

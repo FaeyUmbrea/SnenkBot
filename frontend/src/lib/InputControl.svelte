@@ -3,6 +3,7 @@
 	import type { CanvasEffect, WorkflowIndex } from './canvas';
 	import { referenceTitle } from './canvas';
 	import Icon from './Icon.svelte';
+	import JsonField from './JsonField.svelte';
 
 	let {
 		input,
@@ -14,6 +15,8 @@
 		index,
 		workflowTitles = {},
 		disabled = false,
+		literalLabel,
+		onLiteralEdit,
 		onChange,
 		onSourcePicker
 	}: {
@@ -26,6 +29,8 @@
 		index?: WorkflowIndex;
 		workflowTitles?: Readonly<Record<string, string>>;
 		disabled?: boolean;
+		literalLabel?: string;
+		onLiteralEdit?: () => void;
 		onChange: (value: Input) => CanvasEffect;
 		onSourcePicker: () => void;
 	} = $props();
@@ -72,8 +77,22 @@
 
 <div class="input-control">
 	{#if !hideLabel}<span class="field-label">{label}</span>{/if}
-	<div class="value-row">
-		{#if isToggle}
+	<div class="value-row" class:structured={kind === 'json'}>
+		{#if isLiteral && literalLabel !== undefined}
+			<button
+				class="source-value"
+				aria-label={`Choose ${label.toLowerCase()}`}
+				{disabled}
+				onclick={onLiteralEdit}>{literalLabel}</button
+			>
+		{:else if isLiteral && kind === 'json'}
+			<JsonField
+				{label}
+				value={input.Literal}
+				{disabled}
+				onChange={(value) => onChange({ Literal: value })}
+			/>
+		{:else if isToggle}
 			<label class="toggle">
 				<input
 					type="checkbox"
@@ -157,6 +176,9 @@
 		align-items: stretch;
 		min-width: 0;
 		flex: 0 1 auto;
+	}
+	.value-row.structured {
+		flex: 1;
 	}
 	.literal,
 	.source-value,

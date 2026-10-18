@@ -290,13 +290,12 @@ pub fn validate_configured_inputs(
         };
         let matches_kind = match input {
             Input::Literal(value) if value.is_null() && !field.required => true,
-            Input::Literal(value) => match field.kind {
-                ConfigFieldKind::Text | ConfigFieldKind::Secret => value.is_string(),
-                ConfigFieldKind::Integer => value.as_i64().is_some() || value.as_u64().is_some(),
-                ConfigFieldKind::Toggle => value.is_boolean(),
-            },
-            Input::Text(_) => matches!(field.kind, ConfigFieldKind::Text | ConfigFieldKind::Secret),
-            Input::Object(_) | Input::Array(_) => false,
+            Input::Literal(value) => valid_config_value(field.kind, value),
+            Input::Text(_) => matches!(
+                field.kind,
+                ConfigFieldKind::Text | ConfigFieldKind::Directory | ConfigFieldKind::Secret
+            ),
+            Input::Object(_) | Input::Array(_) => matches!(field.kind, ConfigFieldKind::Json),
             Input::Reference { .. } | Input::Trigger { .. } | Input::Variable { .. } => true,
         };
         if !matches_kind {
@@ -312,6 +311,39 @@ pub fn validate_configured_inputs(
     Ok(())
 }
 
+/// Checks a literal against the same field shape used to build configuration forms.
+fn valid_config_value(kind: ConfigFieldKind, value: &serde_json::Value) -> bool {
+    match kind {
+        ConfigFieldKind::Json => true,
+        ConfigFieldKind::Text | ConfigFieldKind::Directory | ConfigFieldKind::Secret => {
+            value.is_string()
+        }
+        ConfigFieldKind::Integer => value.as_i64().is_some() || value.as_u64().is_some(),
+        ConfigFieldKind::Toggle => value.is_boolean(),
+        ConfigFieldKind::StringList | ConfigFieldKind::StringSet => value
+            .as_array()
+            .is_some_and(|values| values.iter().all(serde_json::Value::is_string)),
+        ConfigFieldKind::StringSetMap => value.as_object().is_some_and(|entries| {
+            entries.values().all(|value| {
+                value
+                    .as_array()
+                    .is_some_and(|values| values.iter().all(serde_json::Value::is_string))
+            })
+        }),
+        ConfigFieldKind::Object(fields) => value.as_object().is_some_and(|object| {
+            fields.iter().all(|field| match object.get(field.id) {
+                Some(value) if value.is_null() && field.kind != ConfigFieldKind::Json => {
+                    !field.required
+                }
+                Some(value) => valid_config_value(field.kind, value),
+                None => !field.required,
+            }) && object
+                .keys()
+                .all(|key| fields.iter().any(|field| field.id == key))
+        }),
+    }
+}
+
 fn validate_declared_outputs(schema: &ConfigSchema, outputs: &Values) -> Result<(), String> {
     for output in schema.outputs {
         let Some(value) = outputs.get(output.id) else {
@@ -324,6 +356,7 @@ fn validate_declared_outputs(schema: &ConfigSchema, outputs: &Values) -> Result<
             ConfigOutputKind::Text => value.is_string(),
             ConfigOutputKind::Number => value.is_number(),
             ConfigOutputKind::Toggle => value.is_boolean(),
+            ConfigOutputKind::Json => value.is_array() || value.is_object(),
         };
         if !valid {
             return Err(format!(
@@ -2860,6 +2893,36 @@ mod tests {
                 .validate_registered_workflow(&workflow("fallback", vec![producer, fallback]))
                 .is_ok()
         );
+    }
+
+    /// Checks that collection outputs stay structured across the engine boundary.
+    #[test]
+    fn structured_outputs_accept_collections_and_reject_encoded_or_scalar_values() {
+        let schema = ConfigSchema {
+            id: "lookup",
+            version: 1,
+            title: "Lookup",
+            fields: &[],
+            outputs: &[crate::schema::ConfigOutput {
+                id: "result",
+                label: "Result",
+                description: "",
+                kind: ConfigOutputKind::Json,
+                required: true,
+            }],
+        };
+        for result in [json!([]), json!({"icon":"https://example.test/icon.png"})] {
+            assert!(
+                validate_declared_outputs(&schema, &Values::from([("result".into(), result)]))
+                    .is_ok()
+            );
+        }
+        for result in [json!("[]"), json!(false), json!(42), json!(null)] {
+            assert!(
+                validate_declared_outputs(&schema, &Values::from([("result".into(), result)]))
+                    .is_err()
+            );
+        }
     }
 
     #[test]

@@ -1,6 +1,8 @@
 <script lang="ts">
 	import DesktopShell from '../src/lib/DesktopShell.svelte';
-	import VtubeConnectionView from '../src/lib/VtubeConnectionView.svelte';
+	import IntegrationOverview from '../src/lib/IntegrationOverview.svelte';
+	import ConfigurationView from '../src/lib/ConfigurationView.svelte';
+	import AuthorizationField from '../src/lib/AuthorizationField.svelte';
 	import type {
 		ConfigurationSnapshot,
 		CredentialPresence,
@@ -50,7 +52,17 @@
 			]
 		},
 		defaults: { host: 'localhost', port: 8001, enabled: true },
-		values: { host: 'localhost', port: 8001, enabled: true }
+		values: { host: 'localhost', port: 8001, enabled: true },
+		credential: null,
+		collection: null,
+		authorization: {
+			id: 'vtube-authorization',
+			label: 'Authorization',
+			description: 'VTube Studio will ask you to approve the connection when you authorize.',
+			prerequisite_field: 'enabled',
+			prerequisite_message: 'Enable and save VTube Studio settings before authorizing.'
+		},
+		authorization_ready: true
 	});
 
 	const connections: ConnectionStatus[] = [
@@ -93,28 +105,32 @@
 	onDismissError={() => {}}
 >
 	<div class="configuration-content">
-		<VtubeConnectionView
-			{snapshot}
-			{connections}
-			{workflows}
-			onOpen={() => {}}
-			onSave={async ({ values }) => {
-				snapshot = { ...snapshot, revision: snapshot.revision + 1, values };
-				return { snapshot, notices: [] };
-			}}
-			onPresence={async () => {
-				await wait();
-				return parameters.get('state') === 'error' ? 'unavailable' : presence;
-			}}
-			onAuthorize={async () => {
-				await wait();
-				presence = 'stored';
-			}}
-			onForget={async () => {
-				await wait();
-				presence = 'empty';
-			}}
-		/>
+		<IntegrationOverview integration="vtube_studio" {connections} {workflows} onOpen={() => {}}>
+			<ConfigurationView
+				{snapshot}
+				onSave={async ({ values }) => {
+					snapshot = { ...snapshot, revision: snapshot.revision + 1, values };
+					return { snapshot, notices: [] };
+				}}
+			/>
+			{#if snapshot.authorization}<AuthorizationField
+					descriptor={snapshot.authorization}
+					ready={snapshot.authorization_ready}
+					contextKey={snapshot.session_id}
+					onPresence={async () => {
+						await wait();
+						return parameters.get('state') === 'error' ? 'unavailable' : presence;
+					}}
+					onAuthorize={async () => {
+						await wait();
+						presence = 'stored';
+					}}
+					onForget={async () => {
+						await wait();
+						presence = 'empty';
+					}}
+				/>{/if}
+		</IntegrationOverview>
 	</div>
 </DesktopShell>
 

@@ -1,6 +1,6 @@
 import { render, fireEvent, waitFor, cleanup } from '@testing-library/svelte';
 import { describe, it, expect, vi } from 'vitest';
-import ObsConnectionView from '../src/lib/ObsConnectionView.svelte';
+import ConfigurationView from '../src/lib/ConfigurationView.svelte';
 import { DesktopRequestError } from '../src/lib/desktop';
 import type { ConfigurationSnapshot, CredentialPresence } from '../src/lib/contracts/index';
 
@@ -26,17 +26,30 @@ const snapshot: ConfigurationSnapshot = {
 		]
 	},
 	defaults: { host: 'localhost' },
-	values: { host: 'localhost' }
+	values: { host: 'localhost' },
+	authorization: null,
+	authorization_ready: false,
+	collection: null,
+	credential: {
+		id: 'obs-password',
+		label: 'OBS password',
+		emptyDescription: 'Optional password for the OBS connection.',
+		storedDescription: 'A password is stored. Enter a new one to replace it.',
+		unavailableDescription: 'Stored password status is unavailable.',
+		saveLabel: 'Save password',
+		savedMessage: 'OBS password saved.',
+		saveError: 'The OBS password could not be saved.',
+		removeLabel: null,
+		removedMessage: null
+	}
 };
 function props() {
 	return {
 		snapshot,
-		connections: [],
-		workflows: [],
-		onOpen: vi.fn(),
+		credential: snapshot.credential!,
 		onSave: vi.fn(async () => ({ snapshot, notices: [] })),
-		onPresence: vi.fn<() => Promise<CredentialPresence>>().mockResolvedValue('stored'),
-		onSavePassword: vi.fn<() => Promise<CredentialPresence>>().mockResolvedValue('stored')
+		onRefreshCredential: vi.fn<() => Promise<CredentialPresence>>().mockResolvedValue('stored'),
+		onSaveCredential: vi.fn<() => Promise<CredentialPresence>>().mockResolvedValue('stored')
 	};
 }
 function deferred<T>() {
@@ -48,30 +61,29 @@ function deferred<T>() {
 }
 
 describe('OBS connection settings', () => {
-	it('reads cached presence once and composes generated configuration and usage', async () => {
+	it('reads cached presence once alongside generated configuration', async () => {
 		const callbacks = props();
-		const view = render(ObsConnectionView, callbacks);
+		const view = render(ConfigurationView, callbacks);
 		await waitFor(() =>
 			expect(view.getByText('A password is stored. Enter a new one to replace it.')).toBeTruthy()
 		);
 		expect((view.getByLabelText('Host') as HTMLInputElement).value).toBe('localhost');
-		expect(view.getByRole('heading', { name: 'Used by' })).toBeTruthy();
 		await view.rerender({ ...callbacks, snapshot: { ...snapshot, revision: 1 } });
-		expect(callbacks.onPresence).toHaveBeenCalledTimes(1);
-		expect(callbacks.onSavePassword).not.toHaveBeenCalled();
+		expect(callbacks.onRefreshCredential).toHaveBeenCalledTimes(1);
+		expect(callbacks.onSaveCredential).not.toHaveBeenCalled();
 	});
 	it('retries failed status without exposing diagnostics or discarding typed drafts', async () => {
 		const callbacks = props();
-		callbacks.onPresence.mockRejectedValueOnce(new Error('/private/credential/backend'));
-		const view = render(ObsConnectionView, callbacks);
+		callbacks.onRefreshCredential.mockRejectedValueOnce(new Error('/private/credential/backend'));
+		const view = render(ConfigurationView, callbacks);
 		await waitFor(() =>
-			expect(view.getByRole('button', { name: 'Retry password status' })).toBeTruthy()
+			expect(view.getByRole('button', { name: 'Retry credential status' })).toBeTruthy()
 		);
 		await fireEvent.change(view.getByLabelText('Host'), { target: { value: 'stream-pc' } });
 		await fireEvent.change(view.getByLabelText('OBS password'), {
 			target: { value: 'typed-password' }
 		});
-		await fireEvent.click(view.getByRole('button', { name: 'Retry password status' }));
+		await fireEvent.click(view.getByRole('button', { name: 'Retry credential status' }));
 		await waitFor(() =>
 			expect(view.getByText('A password is stored. Enter a new one to replace it.')).toBeTruthy()
 		);
@@ -82,8 +94,10 @@ describe('OBS connection settings', () => {
 	it('password confirmation supersedes an older presence read', async () => {
 		const cache = deferred<CredentialPresence>();
 		const callbacks = props();
-		callbacks.onPresence.mockReturnValue(cache.promise);
-		const view = render(ObsConnectionView, callbacks);
+		callbacks.onRefreshCredential.mockReturnValue(cache.promise);
+		const view = render(ConfigurationView, callbacks);
+		expect(view.getByText('Stored password status is unavailable.')).toBeTruthy();
+		expect(view.queryByText('Optional password for the OBS connection.')).toBeNull();
 		await fireEvent.change(view.getByLabelText('OBS password'), {
 			target: { value: 'new-password' }
 		});
@@ -94,15 +108,15 @@ describe('OBS connection settings', () => {
 		cache.resolve('empty');
 		await Promise.resolve();
 		expect(view.getByText('A password is stored. Enter a new one to replace it.')).toBeTruthy();
-		expect(callbacks.onSavePassword).toHaveBeenCalledExactlyOnceWith({ password: 'new-password' });
+		expect(callbacks.onSaveCredential).toHaveBeenCalledExactlyOnceWith('new-password');
 	});
 	it('ignores previous-session cache responses and stops after unmount', async () => {
 		const old = deferred<CredentialPresence>();
 		const callbacks = props();
-		callbacks.onPresence.mockReturnValueOnce(old.promise).mockResolvedValue('stored');
-		const view = render(ObsConnectionView, callbacks);
+		callbacks.onRefreshCredential.mockReturnValueOnce(old.promise).mockResolvedValue('stored');
+		const view = render(ConfigurationView, callbacks);
 		await view.rerender({ ...callbacks, snapshot: { ...snapshot, session_id: 'obs-two' } });
-		await waitFor(() => expect(callbacks.onPresence).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(callbacks.onRefreshCredential).toHaveBeenCalledTimes(2));
 		await waitFor(() =>
 			expect(view.getByText('A password is stored. Enter a new one to replace it.')).toBeTruthy()
 		);
@@ -110,14 +124,14 @@ describe('OBS connection settings', () => {
 		await Promise.resolve();
 		expect(view.getByText('A password is stored. Enter a new one to replace it.')).toBeTruthy();
 		cleanup();
-		expect(callbacks.onPresence).toHaveBeenCalledTimes(2);
+		expect(callbacks.onRefreshCredential).toHaveBeenCalledTimes(2);
 	});
 	it('failed explicit saves retain the stored indication and password draft', async () => {
 		const callbacks = props();
-		callbacks.onSavePassword.mockRejectedValue(
+		callbacks.onSaveCredential.mockRejectedValue(
 			new DesktopRequestError({ code: 'unavailable', message: 'Could not save password.' })
 		);
-		const view = render(ObsConnectionView, callbacks);
+		const view = render(ConfigurationView, callbacks);
 		await waitFor(() =>
 			expect(view.getByText('A password is stored. Enter a new one to replace it.')).toBeTruthy()
 		);

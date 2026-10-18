@@ -73,22 +73,30 @@
 		{:else}
 			<ul>
 				{#each connections as item (`${item.integration}:${item.connection}`)}
+					{@const matchingRequests = requests.filter(
+						(request) =>
+							request.integration === item.integration && request.connection === item.connection
+					)}
 					<li>
-						<div class="connection-title">
-							<span class="pip {item.state}"></span><strong>{item.title}</strong>
+						<div class="connection-row">
+							<span class="pip {item.state}" aria-hidden="true"></span>
+							<strong>{item.title}</strong>
+							<span class="state-label">{stateLabels[item.state]}</span>
+							<button
+								type="button"
+								class="configure"
+								aria-label={`Configure ${item.title}`}
+								title={`Configure ${item.title}`}
+								onclick={() => {
+									close();
+									onConfigure(item);
+								}}><Icon name="settings" size={14} /></button
+							>
 						</div>
-						<p class="state-label">{stateLabels[item.state]}</p>
-						{#if item.detail}<p>{item.detail}</p>{/if}
-						{#each requests.filter((request) => request.integration === item.integration && request.connection === item.connection) as request (request.reason)}
+						{#if item.state !== 'connected' && item.detail}<p class="detail">{item.detail}</p>{/if}
+						{#each matchingRequests as request (request.reason)}
 							<p class="reconnect">{request.reason}</p>
 						{/each}
-						<button
-							class="configure"
-							onclick={() => {
-								close();
-								onConfigure(item);
-							}}>Configure <Icon name="settings" size={14} /></button
-						>
 					</li>
 				{/each}
 			</ul>
@@ -168,26 +176,38 @@
 		list-style: none;
 	}
 	li {
-		padding: 12px 0;
+		padding: 7px 0;
 		border-top: 1px solid var(--border);
 	}
 	li:last-child {
 		padding-bottom: 0;
 	}
-	.connection-title {
-		display: flex;
+	.connection-row {
+		display: grid;
+		grid-template-columns: 7px minmax(0, 1fr) auto 32px;
 		align-items: center;
-		gap: 10px;
+		gap: 8px;
+		min-height: 32px;
+	}
+	.connection-row strong {
+		min-width: 0;
+		overflow-wrap: anywhere;
+	}
+	.configure {
+		width: 32px;
+		padding: 0;
 	}
 	p {
-		margin: 8px 0;
+		margin: 4px 0 4px 15px;
 		color: var(--muted);
 		font-size: 12px;
 		line-height: 1.5;
 		overflow-wrap: anywhere;
 	}
 	.state-label {
-		margin-left: 17px;
+		color: var(--muted);
+		font-size: 12px;
+		white-space: nowrap;
 	}
 	.reconnect {
 		color: var(--gold);

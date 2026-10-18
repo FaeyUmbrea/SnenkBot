@@ -10,6 +10,8 @@
 	} from '../src/lib/contracts/index';
 	import { schemas as testSchemas, workflow as testWorkflow } from './fixture';
 	import { schemas as showcaseSchemas, workflow as showcaseWorkflow } from './showcase';
+	import { twitchAccounts } from './account-fixture';
+	import { inventory } from './consumer-fixture';
 	const showcase = new URLSearchParams(location.search).has('showcase');
 	const schemas = showcase ? showcaseSchemas : testSchemas;
 	const workflow = showcase ? showcaseWorkflow : testWorkflow;
@@ -115,7 +117,11 @@
 			host: showcase ? '127.0.0.1' : '192.168.178.44',
 			port: 4455,
 			tls: false
-		}
+		},
+		credential: null,
+		authorization: null,
+		authorization_ready: false,
+		collection: null
 	};
 	const client: DesktopClient = {
 		...createDesktopClient(async () => {
@@ -123,15 +129,91 @@
 		}),
 		actionDefinitions: async () =>
 			schemas.map((schema) => ({ schema, defaults: { title: 'Native default' } })),
-		twitchAccounts: async () => ({
-			broadcaster: { user_id: '123', login: showcase ? 'example_channel' : 'faey' },
-			bot: { user_id: '456', login: 'snenkbot' }
-		}),
+		twitchAccounts: async () =>
+			twitchAccounts(
+				{ user_id: '123', login: showcase ? 'example_channel' : 'faey' },
+				{ user_id: '456', login: 'snenkbot' }
+			),
 		twitchLoginSnapshot: async () => null,
 		historyPage: async () => ({ entries: [], next_cursor: null }),
+		configurationCatalog: async () => [
+			{
+				id: 'api',
+				title: 'API server',
+				category: 'general',
+				module: 'api',
+				record_id: null,
+				error: null,
+				configured: false
+			},
+			{
+				id: 'twitch',
+				title: 'Twitch',
+				category: 'streaming',
+				module: null,
+				record_id: null,
+				error: null,
+				configured: true
+			},
+			{
+				id: 'obs',
+				title: 'OBS Studio',
+				category: 'broadcast',
+				module: 'obs',
+				record_id: null,
+				error: null,
+				configured: false
+			}
+		],
 		openEditor: async () => editor,
-		openConfiguration: async () => configuration,
-		obsPasswordStatus: async () => 'empty' as const,
+		openConfiguration: async ({ module }) =>
+			module === 'api'
+				? {
+						...configuration,
+						module: 'api',
+						session_id: 'api-fixture',
+						collection: {
+							id: 'api.consumers',
+							title: 'Consumers',
+							item_label: 'consumer',
+							description: 'Manage the overlays and applications that can access SnenkBot.'
+						},
+						schema: {
+							...configuration.schema,
+							id: 'snenkbot.api.settings',
+							title: 'API server',
+							fields: [
+								...configuration.schema.fields.filter((field) => field.id !== 'tls'),
+								{
+									...configuration.schema.fields[0],
+									id: 'record_support',
+									label: 'Record support events'
+								},
+								{
+									...configuration.schema.fields[2],
+									id: 'support_retention',
+									label: 'Support history size'
+								}
+							]
+						},
+						defaults: {
+							enabled: false,
+							host: '127.0.0.1',
+							port: 38764,
+							record_support: false,
+							support_retention: 500
+						},
+						values: {
+							enabled: false,
+							host: '127.0.0.1',
+							port: 38764,
+							record_support: false,
+							support_retention: 500
+						}
+					}
+				: configuration,
+		collectionLoad: async () => inventory,
+		configurationCredentialStatus: async () => 'empty' as const,
 		closeEditor: async () => undefined,
 		closeConfiguration: async () => undefined,
 		applyEditorEdit: async (request) => {

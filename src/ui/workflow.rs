@@ -195,9 +195,14 @@ impl WorkflowPreview {
             .iter()
             .map(|field| {
                 let input = inputs.get(field.id);
-                let editable = !matches!(field.kind, ConfigFieldKind::Secret)
-                    && (matches!(input, Some(Input::Literal(_)))
-                        || (input.is_none() && !field.required));
+                let editable = matches!(
+                    field.kind,
+                    ConfigFieldKind::Text
+                        | ConfigFieldKind::Directory
+                        | ConfigFieldKind::Integer
+                        | ConfigFieldKind::Toggle
+                ) && (matches!(input, Some(Input::Literal(_)))
+                    || (input.is_none() && !field.required));
                 let value = match (field.kind, input) {
                     (_, None) => "Not set".to_owned(),
                     (ConfigFieldKind::Secret, Some(_)) => "Credential reference".to_owned(),
@@ -211,10 +216,15 @@ impl WorkflowPreview {
                     description: field.description.into(),
                     value: value.into(),
                     kind: match field.kind {
-                        ConfigFieldKind::Text => EditorFieldKind::Text,
+                        ConfigFieldKind::Text | ConfigFieldKind::Directory => EditorFieldKind::Text,
                         ConfigFieldKind::Integer => EditorFieldKind::Integer,
                         ConfigFieldKind::Toggle => EditorFieldKind::Toggle,
                         ConfigFieldKind::Secret => EditorFieldKind::Secret,
+                        ConfigFieldKind::Json
+                        | ConfigFieldKind::StringList
+                        | ConfigFieldKind::StringSet
+                        | ConfigFieldKind::StringSetMap
+                        | ConfigFieldKind::Object(_) => EditorFieldKind::Text,
                     },
                     editable,
                     has_choices: editable && field.choice_source.is_some(),

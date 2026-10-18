@@ -15,14 +15,15 @@ use snenkbot_desktop::authentication::{
 use snenkbot_desktop::commands::{
     ApplyEditorEdit, CopyTwitchLogin, CreateWorkflow, CredentialPresence, DismissError,
     EditorSaveResult, EditorSessionRequest, EditorValueSources, InputRequestIdentity,
-    InspectHistory, OpenEditor, RunWorkflow, SaveEditor, SaveObsPassword, SubmitInput,
-    TwitchAccountsSnapshot,
+    InspectHistory, OpenEditor, RunWorkflow, SaveEditor, SubmitInput, TwitchAccountsSnapshot,
 };
 use snenkbot_desktop::configuration::{
-    ConfigurationError, ConfigurationSaveResult, ConfigurationSessionRequest,
-    ConfigurationSnapshot, OpenConfiguration, SaveConfiguration,
+    ConfigurationAuthorizationIdentity, ConfigurationCredentialIdentity, ConfigurationError,
+    ConfigurationSaveResult, ConfigurationSessionRequest, ConfigurationSnapshot, OpenConfiguration,
+    SaveConfiguration, SaveConfigurationCredential,
 };
 use snenkbot_desktop::editor::{EditorError, EditorSnapshot};
+use snenkbot_desktop::events::{EventCommandError, EventIdentity, EventPage, ReplayEvent};
 use snenkbot_desktop::history::{HistoryPage, HistoryQuery, HistoryQueryError};
 use snenkbot_desktop::hub::{DesktopBatch, DesktopSnapshot};
 use snenkbot_desktop::input::{InputBridgeError, InputEvent, InputRequest};
@@ -40,6 +41,15 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 fn export_contracts(output: &std::path::Path) -> Result<(), Box<dyn Error>> {
     let types = Types::default()
+        .register::<snenkbot_desktop::collections::CollectionIdentity>()
+        .register::<snenkbot_desktop::collections::CreateCollectionRecord>()
+        .register::<snenkbot_desktop::collections::CollectionRecordIdentity>()
+        .register::<snenkbot_desktop::collections::CollectionActionRequest>()
+        .register::<snenkbot_desktop::directories::PickConfigurationDirectory>()
+        .register::<snenkbot_desktop::collections::CollectionSnapshot>()
+        .register::<snenkbot_desktop::api_admin::ImportSupportHistory>()
+        .register::<snenkbot_desktop::api_admin::CreateApiConsumer>()
+        .register::<snenk_bot::api::CreatedConsumer>()
         .register::<snenkbot_desktop::choices::ActionChoices>()
         .register::<snenk_bot::choices::ConfigChoice>()
         .register::<CreateWorkflow>()
@@ -82,18 +92,30 @@ fn export_contracts(output: &std::path::Path) -> Result<(), Box<dyn Error>> {
         .register::<SubmitInput>()
         .register::<InputRequestIdentity>()
         .register::<ConfigurationSnapshot>()
+        .register::<snenkbot_desktop::configuration::ConfigurationCatalogEntry>()
         .register::<ConfigurationSaveResult>()
         .register::<ConfigurationError>()
         .register::<OpenConfiguration>()
         .register::<SaveConfiguration>()
         .register::<ConfigurationSessionRequest>()
-        .register::<SaveObsPassword>()
+        .register::<ConfigurationCredentialIdentity>()
+        .register::<ConfigurationAuthorizationIdentity>()
+        .register::<SaveConfigurationCredential>()
         .register::<CredentialPresence>()
         .register::<HistoryQuery>()
         .register::<HistoryPage>()
         .register::<HistoryQueryError>()
         .register::<InspectHistory>()
-        .register::<RunRecord>();
+        .register::<RunRecord>()
+        .register::<EventPage>()
+        .register::<EventIdentity>()
+        .register::<EventCommandError>()
+        .register::<snenk_bot::event_history::EventRecord>()
+        .register::<snenk_bot::app::EventReplayTarget>()
+        .register::<snenk_bot::app::EventReplayTargetKind>()
+        .register::<snenk_bot::app::EventTargetPage>()
+        .register::<snenk_bot::app::EventReplayResult>()
+        .register::<ReplayEvent>();
     std::fs::create_dir_all(output)?;
     let path = output.join("index.ts");
     Typescript::default()

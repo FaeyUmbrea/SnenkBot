@@ -81,6 +81,11 @@ impl AppPaths {
     pub fn history_dir(&self) -> PathBuf {
         self.state.join("history")
     }
+
+    /// Received integration events live apart from workflow run history.
+    pub fn event_history_dir(&self) -> PathBuf {
+        self.state.join("events")
+    }
 }
 
 #[cfg(test)]

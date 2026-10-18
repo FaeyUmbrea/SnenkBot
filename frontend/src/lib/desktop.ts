@@ -1,5 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import type {
+	ConfigurationCatalogEntry,
+	ImportSupportHistory,
 	ApplyEditorEdit,
 	ConfigSchema,
 	DesktopSnapshot,
@@ -15,14 +17,17 @@ import type {
 	InputBridgeError,
 	RunWorkflow,
 	ConfigurationError,
+	EventCommandError,
 	HistoryQueryError,
 	OpenConfiguration,
 	ConfigurationSnapshot,
+	ConfigurationAuthorizationIdentity,
+	ConfigurationCredentialIdentity,
 	SaveConfiguration,
+	SaveConfigurationCredential,
 	ConfigurationSaveResult,
 	ConfigurationSessionRequest,
 	CredentialPresence,
-	SaveObsPassword,
 	HistoryQuery,
 	HistoryPage,
 	InspectHistory,
@@ -48,7 +53,8 @@ export type DesktopTransport = (
 ) => Promise<unknown>;
 
 export class DesktopRequestError extends Error {
-	readonly detail?: EditorError | ConfigurationError | HistoryQueryError | AuthenticationError;
+	readonly detail?:
+		EditorError | ConfigurationError | HistoryQueryError | AuthenticationError | EventCommandError;
 
 	constructor(error: unknown) {
 		const detail = isRequestError(error) ? error : undefined;
@@ -88,7 +94,8 @@ function inputErrorKind(error: unknown): InputBridgeError['kind'] | undefined {
 
 function isRequestError(
 	value: unknown
-): value is EditorError | ConfigurationError | HistoryQueryError | AuthenticationError {
+): value is
+	EditorError | ConfigurationError | HistoryQueryError | AuthenticationError | EventCommandError {
 	return (
 		value !== null &&
 		typeof value === 'object' &&
@@ -118,6 +125,23 @@ export function createDesktopClient(transport: DesktopTransport = invoke) {
 	}
 
 	return {
+		eventsList: () => request<import('./contracts').EventPage>('events_list'),
+		eventsTargets: (data: import('./contracts').EventIdentity) =>
+			request<import('./contracts').EventTargetPage>('events_targets', data),
+		eventsReplay: (data: import('./contracts').ReplayEvent) =>
+			request<import('./contracts').EventReplayResult>('events_replay', data),
+		importSupportHistory: (data: ImportSupportHistory) =>
+			request<number>('api_history_import', data),
+		collectionLoad: (data: import('./contracts').CollectionIdentity) =>
+			request<import('./contracts').CollectionSnapshot>('configuration_collection_load', data),
+		collectionCreate: (data: import('./contracts').CreateCollectionRecord) =>
+			request<string | null>('configuration_collection_create', data),
+		collectionRemove: (data: import('./contracts').CollectionRecordIdentity) =>
+			request<void>('configuration_collection_remove', data),
+		collectionAction: (data: import('./contracts').CollectionActionRequest) =>
+			request<string | null>('configuration_collection_action', data),
+		pickConfigurationDirectory: (data: import('./contracts').PickConfigurationDirectory) =>
+			request<string | null>('configuration_pick_directory', data),
 		twitchLoginSnapshot: () => request<TwitchAuthentication | null>('twitch_login_snapshot'),
 		copyTwitchLogin: (data: CopyTwitchLogin) => request<void>('twitch_login_copy', data),
 		twitchAccounts: () => request<TwitchAccountsSnapshot>('twitch_accounts'),
@@ -127,18 +151,23 @@ export function createDesktopClient(transport: DesktopTransport = invoke) {
 		cancelTwitchLogin: (data: AuthenticationIdentity) => request<void>('twitch_login_cancel', data),
 		openTwitchLogin: (data: AuthenticationIdentity) =>
 			request<void>('twitch_login_open_browser', data),
+		configurationCatalog: () => request<ConfigurationCatalogEntry[]>('configuration_catalog'),
 		openConfiguration: (data: OpenConfiguration) =>
 			request<ConfigurationSnapshot>('configuration_open', data),
 		saveConfiguration: (data: SaveConfiguration) =>
 			request<ConfigurationSaveResult>('configuration_save', data),
 		closeConfiguration: (data: ConfigurationSessionRequest) =>
 			request<void>('configuration_close', data),
-		vtubeAuthorizationStatus: () => request<CredentialPresence>('vtube_authorization_status'),
-		authorizeVtube: () => request<void>('authorize_vtube'),
-		forgetVtubeAuthorization: () => request<void>('forget_vtube_authorization'),
-		obsPasswordStatus: () => request<CredentialPresence>('obs_password_status'),
-		saveObsPassword: (data: SaveObsPassword) =>
-			request<CredentialPresence>('save_obs_password', data),
+		configurationCredentialStatus: (data: ConfigurationCredentialIdentity) =>
+			request<CredentialPresence>('configuration_credential_status', data),
+		saveConfigurationCredential: (data: SaveConfigurationCredential) =>
+			request<CredentialPresence>('configuration_credential_save', data),
+		configurationAuthorizationStatus: (data: ConfigurationAuthorizationIdentity) =>
+			request<CredentialPresence>('configuration_authorization_status', data),
+		configurationAuthorize: (data: ConfigurationAuthorizationIdentity) =>
+			request<void>('configuration_authorize', data),
+		configurationForgetAuthorization: (data: ConfigurationAuthorizationIdentity) =>
+			request<void>('configuration_forget_authorization', data),
 		historyPage: (data: HistoryQuery) => request<HistoryPage>('history_page', data),
 		inspectHistory: (data: InspectHistory) => request<RunRecord_Serialize>('history_inspect', data),
 		snapshot: () => request<DesktopSnapshot>('desktop_snapshot'),

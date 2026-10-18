@@ -1,45 +1,57 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { DesktopRequestError } from './desktop';
+	import ConfigurationFields from './ConfigurationFields.svelte';
+	import CredentialField from './CredentialField.svelte';
+	import AuthorizationField from './AuthorizationField.svelte';
+	import type { CredentialDescriptor, SaveCredential } from './credential';
 	import type {
 		ConfigurationSaveResult,
 		ConfigurationSnapshot,
 		CredentialPresence,
-		SaveConfiguration,
-		SaveObsPassword
+		SaveConfiguration
 	} from './contracts/index';
 	import './theme.css';
 
 	let {
 		snapshot,
-		credentialPresence = 'empty',
+		credentialPresence = 'unavailable',
+		credential,
 		onSave,
-		onSavePassword,
+		onSaveCredential,
+		onRefreshCredential,
+		onAuthorizationPresence,
+		onAuthorize,
+		onForgetAuthorization,
 		onBack,
+		pickDirectory,
 		backLabel = 'Back'
 	}: {
 		snapshot: ConfigurationSnapshot;
 		credentialPresence?: CredentialPresence;
+		credential?: CredentialDescriptor;
 		onSave: (request: SaveConfiguration) => Promise<ConfigurationSaveResult>;
-		onSavePassword?: (request: SaveObsPassword) => Promise<CredentialPresence>;
+		onSaveCredential?: SaveCredential;
+		onRefreshCredential?: () => Promise<CredentialPresence>;
+		onAuthorizationPresence?: () => Promise<CredentialPresence>;
+		onAuthorize?: () => Promise<void>;
+		onForgetAuthorization?: () => Promise<void>;
 		onBack?: () => void;
+		pickDirectory?: (field_path: string[], current_path: string | null) => Promise<string | null>;
 		backLabel?: string;
 	} = $props();
 
 	let draft = $state<Record<string, unknown>>(untrack(() => valuesFromSnapshot(snapshot)));
-	let passwordDraft = $state('');
 	let revision = $state(untrack(() => snapshot.revision));
 	let sessionId = $state(untrack(() => snapshot.session_id));
 	let isDirty = $state(false);
 	let hasRevisionConflict = $state(false);
 	let isSaving = $state(false);
-	let isSavingPassword = $state(false);
+	let isSavingCredential = $state(false);
 	let editVersion = $state(0);
-	let passwordEditVersion = $state(0);
 	let message = $state('');
 	let errorMessage = $state('');
 	let notices = $state<string[]>([]);
-	let hasStoredPassword = $state(untrack(() => credentialPresence === 'stored'));
 
 	const portableFields = $derived(
 		snapshot.schema.fields.filter((field) => field.kind !== 'secret')
@@ -68,10 +80,8 @@
 			draft = valuesFromSnapshot(snapshot);
 			isDirty = false;
 			isSaving = false;
-			isSavingPassword = false;
+			isSavingCredential = false;
 			hasRevisionConflict = false;
-			passwordDraft = '';
-			hasStoredPassword = credentialPresence === 'stored';
 			message = '';
 			errorMessage = '';
 			notices = [];
@@ -87,59 +97,14 @@
 		}
 	});
 
-	$effect(() => {
-		if (credentialPresence === 'stored') hasStoredPassword = true;
-		if (credentialPresence === 'empty') hasStoredPassword = false;
-	});
-
-	function updateField(field: ConfigurationSnapshot['schema']['fields'][number], event: Event) {
-		const target = event.currentTarget as HTMLInputElement;
-		draft = {
-			...draft,
-			[field.id]:
-				field.kind === 'toggle'
-					? target.checked
-					: field.kind === 'integer'
-						? target.value === ''
-							? ''
-							: Number(target.value)
-						: target.value
-		};
+	/** Update the shared schema editor draft and retain optimistic-save bookkeeping. */
+	function updateFields(values: Record<string, unknown>) {
+		draft = values;
 		isDirty = true;
 		editVersion += 1;
 		message = '';
 		errorMessage = '';
 		notices = [];
-	}
-
-	async function savePassword() {
-		if (isSavingPassword || !passwordDraft || !onSavePassword || snapshot.module !== 'obs') return;
-		const requestSessionId = sessionId;
-		const requestPassword = passwordDraft;
-		const requestEditVersion = passwordEditVersion;
-		isSavingPassword = true;
-		message = '';
-		errorMessage = '';
-		try {
-			const presence = await onSavePassword({ password: requestPassword });
-			if (snapshot.session_id !== requestSessionId) return;
-			if (presence !== 'stored')
-				throw new DesktopRequestError({
-					code: 'credential_unavailable',
-					message: 'The OBS password could not be confirmed as stored.'
-				});
-			hasStoredPassword = true;
-			if (passwordEditVersion === requestEditVersion) passwordDraft = '';
-			message = 'OBS password saved.';
-		} catch (error) {
-			if (snapshot.session_id !== requestSessionId) return;
-			errorMessage =
-				error instanceof DesktopRequestError
-					? error.message
-					: 'The OBS password could not be saved.';
-		} finally {
-			if (snapshot.session_id === requestSessionId) isSavingPassword = false;
-		}
 	}
 
 	function reloadSnapshot() {
@@ -202,7 +167,7 @@
 <section
 	class="workflow-editor configuration-view"
 	aria-label={`${snapshot.schema.title} settings`}
-	aria-busy={isSaving || isSavingPassword}
+	aria-busy={isSaving || isSavingCredential}
 >
 	<header class="configuration-header">
 		<div>
@@ -216,68 +181,21 @@
 		}}
 	>
 		<div class="configuration-fields">
-			{#each portableFields as field (field.id)}
-				<div class="field-row">
-					<div class="field-copy">
-						<label for={`config-${field.id}`}>{field.label}</label>
-						{#if field.description}<p>{field.description}</p>{/if}
-					</div>
-					{#if field.kind === 'toggle'}
-						<input
-							id={`config-${field.id}`}
-							aria-label={field.label}
-							type="checkbox"
-							checked={Boolean(draft[field.id])}
-							onchange={(event) => updateField(field, event)}
-						/>
-					{:else}
-						<input
-							id={`config-${field.id}`}
-							aria-label={field.label}
-							type={field.kind === 'integer' ? 'number' : 'text'}
-							step={field.kind === 'integer' ? 1 : undefined}
-							value={String(draft[field.id] ?? '')}
-							required={field.required}
-							onchange={(event) => updateField(field, event)}
-						/>
-					{/if}
-				</div>
-			{/each}
-			{#if snapshot.module === 'obs' && onSavePassword}
-				<div class="field-row password-row">
-					<div class="field-copy">
-						<label for="obs-password">OBS password</label>
-						<p>
-							{hasStoredPassword
-								? 'A password is stored. Enter a new one to replace it.'
-								: credentialPresence === 'unavailable'
-									? 'Stored password status is unavailable. You can still try saving a password.'
-									: 'Optional password for the OBS connection.'}
-						</p>
-					</div>
-					<div class="password-controls">
-						<input
-							id="obs-password"
-							type="password"
-							autocomplete="new-password"
-							value={passwordDraft}
-							onchange={(event) => {
-								passwordDraft = event.currentTarget.value;
-								passwordEditVersion += 1;
-								message = '';
-								errorMessage = '';
-								notices = [];
-							}}
-						/>
-						<button
-							type="button"
-							onclick={savePassword}
-							disabled={!passwordDraft || isSavingPassword}
-						>
-							{isSavingPassword ? 'Saving password…' : 'Save password'}
-						</button>
-					</div>
-				</div>
+			<ConfigurationFields
+				fields={portableFields}
+				values={draft}
+				{pickDirectory}
+				onChange={updateFields}
+			/>
+			{#if credential && onSaveCredential}
+				<CredentialField
+					descriptor={credential}
+					contextKey={snapshot.session_id}
+					presence={credentialPresence}
+					onSave={onSaveCredential}
+					onRefresh={onRefreshCredential}
+					onBusyChange={(busy) => (isSavingCredential = busy)}
+				/>
 			{/if}
 		</div>
 		{#if hasRevisionConflict}
@@ -304,13 +222,23 @@
 					type="button"
 					class="secondary"
 					onclick={onBack}
-					disabled={isSaving || isSavingPassword}>{backLabel}</button
+					disabled={isSaving || isSavingCredential}>{backLabel}</button
 				>{/if}
 			<button type="submit" disabled={isSaving || hasRevisionConflict}
 				>{isSaving ? 'Saving…' : 'Save settings'}</button
 			>
 		</footer>
 	</form>
+	{#if snapshot.authorization && onAuthorizationPresence && onAuthorize && onForgetAuthorization}
+		<AuthorizationField
+			descriptor={snapshot.authorization}
+			ready={snapshot.authorization_ready}
+			contextKey={snapshot.session_id}
+			onPresence={onAuthorizationPresence}
+			{onAuthorize}
+			onForget={onForgetAuthorization}
+		/>
+	{/if}
 </section>
 
 <style>
@@ -343,56 +271,12 @@
 		font-size: 16px;
 		font-weight: 600;
 	}
-	.field-copy p {
-		margin: 4px 0 0;
-		color: var(--muted);
-	}
 	.configuration-fields {
 		display: flex;
 		flex-direction: column;
 		gap: 0;
 		padding: 0 16px;
 		background: var(--side);
-	}
-	.field-row {
-		display: grid;
-		grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr);
-		gap: 16px;
-		align-items: center;
-		min-height: 48px;
-		padding: 8px 0;
-		border-bottom: 1px solid var(--border);
-	}
-	.field-row:last-child {
-		border-bottom: 0;
-	}
-	.field-copy label {
-		font-weight: 400;
-	}
-	.field-copy p {
-		font-size: 12px;
-	}
-	input:not([type='checkbox']) {
-		width: 100%;
-		height: 32px;
-		padding: 4px 8px;
-		background: var(--surface);
-		border: 1px solid var(--border);
-		border-radius: 4px;
-	}
-	input[type='checkbox'] {
-		justify-self: start;
-		width: 18px;
-		height: 18px;
-	}
-	.password-controls {
-		display: flex;
-		gap: 8px;
-		align-items: center;
-	}
-	.password-controls input {
-		flex: 1;
-		min-width: 0;
 	}
 	button {
 		min-height: 32px;
@@ -410,10 +294,6 @@
 		margin-top: 16px;
 	}
 	@media (max-width: 640px) {
-		.field-row {
-			grid-template-columns: 1fr;
-			gap: 8px;
-		}
 		.configuration-header {
 			align-items: flex-start;
 		}

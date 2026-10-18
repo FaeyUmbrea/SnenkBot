@@ -3,8 +3,8 @@ use std::collections::HashSet;
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    Data, DeriveInput, Expr, Fields, Lit, LitInt, LitStr, Meta, Token, Type, parse_macro_input,
-    punctuated::Punctuated, spanned::Spanned,
+    Data, DeriveInput, Expr, Fields, Lit, LitInt, LitStr, Meta, Path, Token, Type,
+    parse_macro_input, punctuated::Punctuated, spanned::Spanned,
 };
 
 #[proc_macro_derive(ConfigSchema, attributes(config))]
@@ -146,13 +146,14 @@ fn value_kind(ty: &Type) -> syn::Result<proc_macro2::TokenStream> {
     };
     match segment.ident.to_string().as_str() {
         "String" => Ok(quote!(::snenk_bot::schema::ConfigOutputKind::Text)),
+        "Vec" | "Value" | "BTreeMap" => Ok(quote!(::snenk_bot::schema::ConfigOutputKind::Json)),
         "bool" => Ok(quote!(::snenk_bot::schema::ConfigOutputKind::Toggle)),
         "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64" | "f32" | "f64" => {
             Ok(quote!(::snenk_bot::schema::ConfigOutputKind::Number))
         }
         _ => Err(syn::Error::new(
             ty.span(),
-            "unsupported workflow value type; use String, bool, a number, or Option of one",
+            "unsupported workflow value type; use String, bool, a number, Vec, Value, BTreeMap, or Option of one",
         )),
     }
 }
@@ -169,6 +170,12 @@ fn expand_config_schema(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
     let mut schema_id = None;
     let mut version = None;
     let mut title = None;
+    let mut credential: Option<Path> = None;
+    let mut authorization: Option<Path> = None;
+    let mut collection: Option<Path> = None;
+    let mut actions: Option<Path> = None;
+    let mut category: Option<LitStr> = None;
+    let mut integration: Option<LitStr> = None;
     let mut outputs = Vec::new();
     let mut output_ids = HashSet::new();
 
@@ -186,6 +193,42 @@ fn expand_config_schema(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                 Ok(())
             } else if meta.path.is_ident("title") {
                 title = Some(meta.value()?.parse::<LitStr>()?);
+                Ok(())
+            } else if meta.path.is_ident("credential") {
+                let path = meta.value()?.parse::<Path>()?;
+                if credential.replace(path).is_some() {
+                    return Err(meta.error("duplicate credential declaration"));
+                }
+                Ok(())
+            } else if meta.path.is_ident("authorization") {
+                let path = meta.value()?.parse::<Path>()?;
+                if authorization.replace(path).is_some() {
+                    return Err(meta.error("duplicate authorization declaration"));
+                }
+                Ok(())
+            } else if meta.path.is_ident("collection") {
+                let path = meta.value()?.parse::<Path>()?;
+                if collection.replace(path).is_some() {
+                    return Err(meta.error("duplicate collection declaration"));
+                }
+                Ok(())
+            } else if meta.path.is_ident("actions") {
+                let path = meta.value()?.parse::<Path>()?;
+                if actions.replace(path).is_some() {
+                    return Err(meta.error("duplicate actions declaration"));
+                }
+                Ok(())
+            } else if meta.path.is_ident("category") {
+                let value = meta.value()?.parse::<LitStr>()?;
+                if category.replace(value).is_some() {
+                    return Err(meta.error("duplicate category declaration"));
+                }
+                Ok(())
+            } else if meta.path.is_ident("integration") {
+                let value = meta.value()?.parse::<LitStr>()?;
+                if integration.replace(value).is_some() {
+                    return Err(meta.error("duplicate integration declaration"));
+                }
                 Ok(())
             } else if meta.path.is_ident("output") {
                 let content;
@@ -222,10 +265,11 @@ fn expand_config_schema(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                     "text" => quote!(::snenk_bot::schema::ConfigOutputKind::Text),
                     "number" => quote!(::snenk_bot::schema::ConfigOutputKind::Number),
                     "toggle" => quote!(::snenk_bot::schema::ConfigOutputKind::Toggle),
+                    "json" => quote!(::snenk_bot::schema::ConfigOutputKind::Json),
                     _ => {
                         return Err(syn::Error::new(
                             kind.span(),
-                            "output kind must be `text`, `number`, or `toggle`",
+                            "output kind must be `text`, `number`, `toggle`, or `json`",
                         ));
                     }
                 };
@@ -242,7 +286,7 @@ fn expand_config_schema(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                 Ok(())
             } else {
                 Err(meta.error(
-                    "supported keys are `id`, `version`, `title`, and repeatable `output(...)`",
+                    "supported keys are `id`, `version`, `title`, `credential`, `authorization`, `collection`, `actions`, `category`, `integration`, and repeatable `output(...)`",
                 ))
             }
         })?;
@@ -260,6 +304,41 @@ fn expand_config_schema(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         return Err(syn::Error::new(
             version.span(),
             "config version must be at least 1",
+        ));
+    }
+    if category.is_some() != integration.is_some() {
+        return Err(syn::Error::new(
+            input.ident.span(),
+            "category and integration must be declared together",
+        ));
+    }
+    let category = category
+        .map(|category| match category.value().as_str() {
+            "general" => Ok(quote!(Some(
+                ::snenk_bot::schema::ConfigurationCategory::General
+            ))),
+            "broadcast" => Ok(quote!(Some(
+                ::snenk_bot::schema::ConfigurationCategory::Broadcast
+            ))),
+            "streaming" => Ok(quote!(Some(
+                ::snenk_bot::schema::ConfigurationCategory::Streaming
+            ))),
+            "devices" => Ok(quote!(Some(
+                ::snenk_bot::schema::ConfigurationCategory::Devices
+            ))),
+            _ => Err(syn::Error::new(
+                category.span(),
+                "unsupported configuration category",
+            )),
+        })
+        .transpose()?
+        .unwrap_or_else(|| quote!(None));
+    if let Some(id) = &integration
+        && (id.value().trim().is_empty() || id.value().chars().any(char::is_whitespace))
+    {
+        return Err(syn::Error::new(
+            id.span(),
+            "integration ID must not be empty or contain whitespace",
         ));
     }
 
@@ -286,6 +365,7 @@ fn expand_config_schema(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         let mut description = None;
         let mut introduced = None;
         let mut secret = false;
+        let mut directory = false;
         let mut choice = None;
         let mut dependency = None;
 
@@ -310,6 +390,12 @@ fn expand_config_schema(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                 } else if meta.path.is_ident("secret") {
                     secret = true;
                     Ok(())
+                } else if meta.path.is_ident("directory") {
+                    if directory {
+                        return Err(meta.error("duplicate directory declaration"));
+                    }
+                    directory = true;
+                    Ok(())
                 } else if meta.path.is_ident("choice") {
                     choice = Some(meta.value()?.parse::<LitStr>()?);
                     Ok(())
@@ -318,7 +404,7 @@ fn expand_config_schema(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                     Ok(())
                 } else {
                     Err(meta.error(
-                        "supported keys are `id`, `label`, `description`, `introduced`, `secret`, `choice`, and `depends_on`",
+                        "supported keys are `id`, `label`, `description`, `introduced`, `secret`, `directory`, `choice`, and `depends_on`",
                     ))
                 }
             })?;
@@ -357,14 +443,26 @@ fn expand_config_schema(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         }
 
         let (value_type, field_required) = optional_inner_type(&field.ty)?;
-        let kind = field_kind(value_type, secret)?;
+        let kind = if directory {
+            if !is_string(value_type) || secret || choice.is_some() || dependency.is_some() {
+                return Err(syn::Error::new(
+                    span,
+                    "directory is only valid for String or Option<String> fields without secret or choice metadata",
+                ));
+            }
+            quote!(::snenk_bot::schema::ConfigFieldKind::Directory)
+        } else {
+            field_kind(value_type, secret)?
+        };
         if choice.is_some()
             && (secret
-                || !matches!(value_type, Type::Path(path) if path.path.segments.last().is_some_and(|s| s.ident == "String")))
+                || !is_string(value_type)
+                    && !is_string_collection(value_type)
+                    && !is_string_set_map(value_type))
         {
             return Err(syn::Error::new(
                 span,
-                "choice sources are only valid for non-secret String fields",
+                "choice sources are only valid for non-secret String, Vec<String>, BTreeSet<String>, or BTreeMap<String, BTreeSet<String>> fields",
             ));
         }
         let choice_source = if let Some(source) = choice.as_ref() {
@@ -421,6 +519,11 @@ fn expand_config_schema(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
     }
 
     let name = &input.ident;
+    let credential = credential.map_or_else(|| quote!(None), |path| quote!(Some(#path)));
+    let authorization = authorization.map_or_else(|| quote!(None), |path| quote!(Some(#path)));
+    let collection = collection.map_or_else(|| quote!(None), |path| quote!(Some(#path)));
+    let actions = actions.map_or_else(|| quote!(&[]), |path| quote!(#path));
+    let integration = integration.map_or_else(|| quote!(None), |id| quote!(Some(#id)));
     Ok(quote! {
         impl ::snenk_bot::schema::DescribeConfig for #name {
             const SCHEMA: &'static ::snenk_bot::schema::ConfigSchema =
@@ -431,6 +534,12 @@ fn expand_config_schema(input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
                     fields: &[#(#field_descriptors),*],
                     outputs: &[#(#outputs),*],
                 };
+            const CREDENTIAL: Option<::snenk_bot::schema::CredentialDescriptor> = #credential;
+            const AUTHORIZATION: Option<::snenk_bot::schema::AuthorizationDescriptor> = #authorization;
+            const COLLECTION: Option<::snenk_bot::schema::ConfigurationCollectionDescriptor> = #collection;
+            const ACTIONS: &'static [::snenk_bot::schema::ConfigurationActionDescriptor] = #actions;
+            const CATEGORY: Option<::snenk_bot::schema::ConfigurationCategory> = #category;
+            const INTEGRATION: Option<&'static str> = #integration;
         }
     })
 }
@@ -552,21 +661,98 @@ fn field_kind(ty: &Type, secret: bool) -> syn::Result<proc_macro2::TokenStream> 
     let type_name = segment.ident.to_string();
 
     match (type_name.as_str(), secret) {
+        ("Value", false)
+            if path.path.segments.len() == 2
+                && path
+                    .path
+                    .segments
+                    .first()
+                    .is_some_and(|part| part.ident == "serde_json") =>
+        {
+            Ok(quote!(::snenk_bot::schema::ConfigFieldKind::Json))
+        }
         ("String", false) => Ok(quote!(::snenk_bot::schema::ConfigFieldKind::Text)),
         ("String", true) => Ok(quote!(::snenk_bot::schema::ConfigFieldKind::Secret)),
         ("bool", false) => Ok(quote!(::snenk_bot::schema::ConfigFieldKind::Toggle)),
         ("u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64", false) => {
             Ok(quote!(::snenk_bot::schema::ConfigFieldKind::Integer))
         }
+        ("Vec", false) if generic_types(segment, 1).is_some_and(|args| is_string(args[0])) => {
+            Ok(quote!(::snenk_bot::schema::ConfigFieldKind::StringList))
+        }
+        ("BTreeSet", false) if generic_types(segment, 1).is_some_and(|args| is_string(args[0])) => {
+            Ok(quote!(::snenk_bot::schema::ConfigFieldKind::StringSet))
+        }
+        ("BTreeMap", false)
+            if generic_types(segment, 2)
+                .is_some_and(|args| is_string(args[0]) && is_string_set(args[1])) =>
+        {
+            Ok(quote!(::snenk_bot::schema::ConfigFieldKind::StringSetMap))
+        }
         (_, true) => Err(syn::Error::new(
             ty.span(),
             "`secret` is only valid for String fields",
         )),
+        (_, false)
+            if matches!(segment.arguments, syn::PathArguments::None)
+                && type_name.chars().next().is_some_and(char::is_uppercase) =>
+        {
+            Ok(quote!(::snenk_bot::schema::ConfigFieldKind::Object(
+                <#ty as ::snenk_bot::schema::DescribeConfig>::SCHEMA.fields
+            )))
+        }
         _ => Err(syn::Error::new(
             ty.span(),
-            "unsupported configuration field type; supported types are String, bool, and integers",
+            "unsupported configuration field type; supported types are String, bool, integers, Vec<String>, BTreeSet<String>, BTreeMap<String, BTreeSet<String>>, and structs deriving ConfigSchema",
         )),
     }
+}
+
+/// Returns the exact generic type arguments of a collection segment.
+fn generic_types(segment: &syn::PathSegment, expected: usize) -> Option<Vec<&Type>> {
+    let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return None;
+    };
+    let types = arguments
+        .args
+        .iter()
+        .map(|argument| match argument {
+            syn::GenericArgument::Type(ty) => Some(ty),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    (types.len() == expected).then_some(types)
+}
+
+/// Checks whether a type is a plain string value.
+fn is_string(ty: &Type) -> bool {
+    matches!(ty, Type::Path(path) if path.path.segments.last().is_some_and(|segment| {
+        segment.ident == "String" && matches!(segment.arguments, syn::PathArguments::None)
+    }))
+}
+
+/// Checks whether a type is a set of strings.
+fn is_string_set(ty: &Type) -> bool {
+    matches!(ty, Type::Path(path) if path.path.segments.last().is_some_and(|segment| {
+        segment.ident == "BTreeSet" && generic_types(segment, 1).is_some_and(|args| is_string(args[0]))
+    }))
+}
+
+/// Checks whether a type maps string keys to sets of strings.
+fn is_string_set_map(ty: &Type) -> bool {
+    matches!(ty, Type::Path(path) if path.path.segments.last().is_some_and(|segment| {
+        segment.ident == "BTreeMap" && generic_types(segment, 2).is_some_and(|args| {
+            is_string(args[0]) && is_string_set(args[1])
+        })
+    }))
+}
+
+/// Checks whether a type is a list or set of strings.
+fn is_string_collection(ty: &Type) -> bool {
+    is_string_set(ty)
+        || matches!(ty, Type::Path(path) if path.path.segments.last().is_some_and(|segment| {
+            segment.ident == "Vec" && generic_types(segment, 1).is_some_and(|args| is_string(args[0]))
+        }))
 }
 
 #[cfg(test)]
@@ -595,11 +781,36 @@ mod tests {
         assert!(!expanded.contains("token"));
     }
 
+    /// Checks structured output metadata from both supported derive annotations.
+    #[test]
+    fn structured_outputs_keep_their_json_shape_in_metadata() {
+        let input: DeriveInput = syn::parse2(quote! {
+            struct Results { #[value(label = "Matches")] matches: Vec<String> }
+        })
+        .unwrap();
+        assert!(
+            expand_workflow_values(input)
+                .unwrap()
+                .to_string()
+                .contains("ConfigOutputKind :: Json")
+        );
+        let input: DeriveInput = syn::parse2(quote! {
+            #[config(id = "lookup", version = 1, title = "Lookup", output("results", "Results", "json"))]
+            struct Lookup {}
+        }).unwrap();
+        assert!(
+            expand_config_schema(input)
+                .unwrap()
+                .to_string()
+                .contains("ConfigOutputKind :: Json")
+        );
+    }
+
     #[test]
     fn workflow_values_reject_missing_labels_and_unsupported_types() {
         for field in [
             quote!(message: String,),
-            quote!(#[value(label = "Items")] items: Vec<String>,),
+            quote!(#[value(label = "Items")] items: (String, String),),
             quote!(#[value(label = "Token", secret)] token: String,),
         ] {
             let input: DeriveInput = syn::parse2(quote! {
@@ -614,8 +825,10 @@ mod tests {
     fn rejects_unsupported_optional_shapes() {
         for field_type in [
             quote!(Option<Option<String>>),
-            quote!(Option<Vec<String>>),
+            quote!(Option<Vec<u32>>),
             quote!(Option<(String, String)>),
+            quote!(BTreeMap<String, Vec<String>>),
+            quote!(BTreeMap<u32, BTreeSet<String>>),
         ] {
             let input: DeriveInput = syn::parse2(quote! {
                 #[config(id = "test", version = 1, title = "Test")]
@@ -625,6 +838,147 @@ mod tests {
                 }
             })
             .unwrap();
+            assert!(expand_config_schema(input).is_err());
+        }
+    }
+
+    /// Directory controls preserve string optionality and emit integration-owned action metadata.
+    #[test]
+    fn derives_directory_fields_and_record_actions() {
+        let input: DeriveInput = syn::parse2(quote! {
+            #[config(id = "test", version = 1, title = "Test", actions = RECORD_ACTIONS)]
+            struct Config {
+                #[config(id = "root", label = "Root", introduced = 1, directory)]
+                root: String,
+                #[config(id = "optional", label = "Optional", introduced = 1, directory)]
+                optional: Option<String>,
+            }
+        })
+        .unwrap();
+        let expanded = expand_config_schema(input).unwrap().to_string();
+        assert_eq!(expanded.matches("ConfigFieldKind :: Directory").count(), 2);
+        assert!(expanded.contains("required : false"));
+        assert!(expanded.contains("ConfigurationActionDescriptor"));
+        assert!(expanded.contains("= RECORD_ACTIONS"));
+    }
+
+    /// Directory metadata cannot bypass string, secret, or choice type checks.
+    #[test]
+    fn rejects_invalid_directory_metadata_and_duplicate_actions() {
+        for (ty, attributes) in [
+            (quote!(bool), quote!(directory)),
+            (quote!(Vec<String>), quote!(directory)),
+            (quote!(String), quote!(directory, secret)),
+            (quote!(String), quote!(directory, choice = "test.folders")),
+            (quote!(String), quote!(directory, directory)),
+        ] {
+            let input: DeriveInput = syn::parse2(quote! {
+                #[config(id = "test", version = 1, title = "Test")]
+                struct Config { #[config(id = "root", label = "Root", introduced = 1, #attributes)] root: #ty }
+            }).unwrap();
+            assert!(expand_config_schema(input).is_err());
+        }
+        let input: DeriveInput = syn::parse2(quote! {
+            #[config(id = "test", version = 1, title = "Test", actions = FIRST, actions = SECOND)]
+            struct Config {}
+        })
+        .unwrap();
+        assert!(expand_config_schema(input).is_err());
+    }
+
+    /// Nested settings and supported collection types produce reusable field declarations.
+    #[test]
+    fn derives_nested_objects_and_string_collections() {
+        let input: DeriveInput = syn::parse2(quote! {
+            #[config(id = "test", version = 1, title = "Test")]
+            struct Config {
+                #[config(id = "nested", label = "Nested", introduced = 1)]
+                nested: Nested,
+                #[config(id = "names", label = "Names", introduced = 1)]
+                names: Vec<String>,
+                #[config(id = "channels", label = "Channels", introduced = 1, choice = "api.channels")]
+                channels: BTreeSet<String>,
+                #[config(id = "providers", label = "Providers", introduced = 1, choice = "api.provider_operations")]
+                providers: BTreeMap<String, BTreeSet<String>>,
+                #[config(id = "payload", label = "Payload", introduced = 1)]
+                payload: serde_json::Value,
+            }
+        })
+        .unwrap();
+        let expanded = expand_config_schema(input).unwrap().to_string();
+        assert!(expanded.contains("ConfigFieldKind :: Object"));
+        assert!(expanded.contains("Nested as :: snenk_bot :: schema :: DescribeConfig"));
+        assert!(expanded.contains("ConfigFieldKind :: StringList"));
+        assert!(expanded.contains("ConfigFieldKind :: StringSet"));
+        assert!(expanded.contains("ConfigFieldKind :: StringSetMap"));
+        assert!(expanded.contains("ConfigFieldKind :: Json"));
+        assert!(expanded.contains("api.provider_operations"));
+    }
+
+    /// Config-owned controls are emitted as associated metadata on the existing schema trait.
+    #[test]
+    fn derives_optional_config_controls_and_rejects_duplicates() {
+        let input: DeriveInput = syn::parse2(quote! {
+            #[config(id = "test", version = 1, title = "Test",
+                credential = PASSWORD, authorization = PAIRING, collection = RECORDS)]
+            struct Config {
+                #[config(id = "enabled", label = "Enabled", introduced = 1)]
+                enabled: bool,
+            }
+        })
+        .unwrap();
+        let expanded = expand_config_schema(input).unwrap().to_string();
+        for expected in ["Some (PASSWORD)", "Some (PAIRING)", "Some (RECORDS)"] {
+            assert!(expanded.contains(expected), "missing {expected}");
+        }
+        for duplicate in [
+            quote!(credential = PASSWORD, credential = OTHER),
+            quote!(authorization = PAIRING, authorization = OTHER),
+            quote!(collection = RECORDS, collection = OTHER),
+        ] {
+            let input: DeriveInput = syn::parse2(quote! {
+                #[config(id = "test", version = 1, title = "Test", #duplicate)]
+                struct Config {
+                    #[config(id = "enabled", label = "Enabled", introduced = 1)]
+                    enabled: bool,
+                }
+            })
+            .unwrap();
+            assert!(expand_config_schema(input).is_err());
+        }
+    }
+
+    /// Directory identity is paired and its finite categories are checked at compile time.
+    #[test]
+    fn validates_config_directory_metadata() {
+        let valid: DeriveInput = syn::parse2(quote! {
+            #[config(id = "test", version = 1, title = "Test",
+                category = "devices", integration = "test-device")]
+            struct Config { #[config(id = "enabled", label = "Enabled", introduced = 1)] enabled: bool }
+        }).unwrap();
+        let expanded = expand_config_schema(valid).unwrap().to_string();
+        assert!(expanded.contains("ConfigurationCategory :: Devices"));
+        assert!(expanded.contains("Some (\"test-device\")"));
+        for invalid in [
+            quote!(category = "devices"),
+            quote!(integration = "test-device"),
+            quote!(category = "unknown", integration = "test-device"),
+            quote!(category = "devices", integration = ""),
+            quote!(
+                category = "devices",
+                integration = "test",
+                integration = "other"
+            ),
+            quote!(
+                category = "devices",
+                category = "general",
+                integration = "test"
+            ),
+        ] {
+            let input: DeriveInput = syn::parse2(quote! {
+                #[config(id = "test", version = 1, title = "Test", #invalid)]
+                struct Config { #[config(id = "enabled", label = "Enabled", introduced = 1)] enabled: bool }
+            }).unwrap();
             assert!(expand_config_schema(input).is_err());
         }
     }
