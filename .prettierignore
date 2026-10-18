@@ -1,0 +1,15 @@
+node_modules
+dist
+src/lib/contracts
+package-lock.json
+
+# Rust, product documentation and repository metadata are outside the frontend formatter.
+/crates
+/src-tauri
+/target
+/.github
+/.idea
+/assets
+/docs
+README.md
+CONTRIBUTING.md

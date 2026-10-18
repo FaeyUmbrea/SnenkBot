@@ -11,19 +11,19 @@ This document describes the basic contribution process and the licensing terms t
 3. Make and test your changes.
 4. Open a pull request against the repository's main development branch.
 
-You'll need Rust, Cargo and Node.js 22 or newer. Install the frontend dependencies with `npm ci` from `frontend/`, then use `npm run desktop:build` there to build the desktop app and its platform bundle. Linux also needs the [Tauri system dependencies](https://v2.tauri.app/start/prerequisites/).
+You'll need Rust, Cargo and Node.js 22 or newer. Install the frontend dependencies with `npm ci` from the repository root, then use `npm run desktop:build` to build the desktop app and its platform bundle. Linux also needs the [Tauri system dependencies](https://v2.tauri.app/start/prerequisites/).
 
 Run `cargo test --workspace --all-features` and the frontend checks below to verify your changes.
 
-The [desktop architecture and maintenance reference](https://tasks.void.monster/articles/SNENKBOT-A-4) covers the source map, isolated fixtures, data and credentials, generated contracts, signing, release workflows, and remaining Version 1 work. The released desktop entry point is in `crates/snenkbot_desktop`; the root `cargo run` still launches the legacy Slint application.
+The [desktop architecture and maintenance reference](https://tasks.void.monster/articles/SNENKBOT-A-4) covers the source map, isolated fixtures, data and credentials, generated contracts, signing, release workflows, and remaining Version 1 work. The frontend lives in root `src/`, with `package.json`, Vite configuration and `index.html` alongside it. The native Tauri app lives in `src-tauri/`; its thin `src/main.rs` calls the library entry point, and `src/application.rs` owns startup and the isolated startup fixture. Shared Rust behavior lives in `crates/snenkbot_core`, with schema derives in `crates/snenkbot_macros`. The root Cargo manifest is a workspace; its default member is `src-tauri`. Run `npm run desktop:dev` at the repository root to start Tauri with Vite hot reload. Tauri manages the separate `custom-protocol` feature for packaged builds.
 
 ### Desktop configuration
 
-An integration's Rust settings type declares its fields with `#[derive(ConfigSchema)]` and `#[config(...)]` in the owning module. The declaration also supplies its settings category and stable integration ID. Optional `credential`, `authorization`, and `collection` descriptors name controls that sit beside the form. See `src/schema.rs` for the generated `DescribeConfig` contract and `src/api/config.rs` for a settings type with a named-record collection.
+An integration's Rust settings type declares its fields with `#[derive(ConfigSchema)]` and `#[config(...)]` in the owning module. The declaration also supplies its settings category and stable integration ID. Optional `credential`, `authorization`, and `collection` descriptors name controls that sit beside the form. See `crates/snenkbot_core/src/schema.rs` for the generated `DescribeConfig` contract and `crates/snenkbot_core/src/api/config.rs` for a settings type with a named-record collection.
 
 The desktop's `configuration_catalog` lists available integrations and their saved state. `configuration_open` returns a native session snapshot containing the schema, values, and optional descriptors. `SettingsView` uses the same `ConfigurationView` and `ConfigurationCollection` controls for each snapshot. Adding a field to an existing settings type therefore uses the shared form instead of a new integration-specific screen. A new integration still needs its native catalog binding and save/validation path; its domain behavior stays in the integration module.
 
-Keep persistence and secrets behind the native session commands. Form values are portable configuration; credentials use their separate native credential commands, pairing uses the authorization commands, and named records use their owning collection commands. The frontend sends the session and descriptor IDs back to native code rather than interpreting a provider's storage format or credential value. Regenerate the frontend contracts with `cargo run -p snenkbot_desktop --example export_contracts -- frontend/src/lib/contracts` after changing exported Rust types.
+Keep persistence and secrets behind the native session commands. Form values are portable configuration; credentials use their separate native credential commands, pairing uses the authorization commands, and named records use their owning collection commands. The frontend sends the session and descriptor IDs back to native code rather than interpreting a provider's storage format or credential value. The desktop crate’s `examples/export_contracts.rs` is the development command that exports Rust IPC declarations as TypeScript. Regenerate the frontend contracts with `cargo run -p snenkbot_desktop --example export_contracts -- src/lib/contracts` after changing exported Rust types.
 
 ## Pull requests
 
@@ -77,7 +77,7 @@ That's really all there is to it. Don't overthink the type - just pick whichever
 
 - Run `cargo fmt --all -- --check` before committing (or set up your editor to format on save)
 - Make sure `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
-- For changes to the desktop frontend, run `npm run format:check`, `npm run lint`, `npm run check`, and `npm test` from `frontend/`. Use `npm run format` to format frontend changes.
+- For changes to the desktop frontend, run `npm run format:check`, `npm run lint`, `npm run check`, and `npm test` from the repository root. Use `npm run format` to format frontend changes.
 
 ## AI-assisted development
 

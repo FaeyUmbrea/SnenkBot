@@ -1,4 +1,4 @@
 /target
-/frontend/node_modules
-/frontend/dist
-/crates/snenkbot_desktop/gen/schemas
+/node_modules
+/dist
+/src-tauri/gen/schemas
