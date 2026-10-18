@@ -9,6 +9,7 @@ pub mod eventsub;
 pub mod helix;
 pub mod listener;
 pub mod login;
+pub(crate) mod name_colors;
 pub mod session;
 
 use std::collections::BTreeSet;

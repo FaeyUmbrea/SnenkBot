@@ -451,6 +451,43 @@ impl<T: HelixTransport> Helix<T> {
             .collect())
     }
 
+    /// Fetches the requested viewer's original chat colour; an unset colour remains absent.
+    pub async fn get_user_chat_color(
+        &self,
+        access_token: &str,
+        user_id: &str,
+    ) -> Result<Option<String>, HelixError> {
+        if user_id.is_empty() || !user_id.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(HelixError::InvalidInput);
+        }
+        /// Identity-bound row returned by Twitch's chat colour endpoint.
+        #[derive(Deserialize)]
+        struct Color {
+            user_id: String,
+            color: String,
+        }
+        /// Collection returned by the Helix endpoint.
+        #[derive(Deserialize)]
+        struct Reply {
+            data: Vec<Color>,
+        }
+        let reply: Reply = self
+            .execute(
+                HelixMethod::Get,
+                "chat/color",
+                &[("user_id", user_id)],
+                access_token,
+                None,
+            )
+            .await?;
+        Ok(reply
+            .data
+            .into_iter()
+            .find(|row| row.user_id == user_id)
+            .map(|row| row.color)
+            .filter(|color| super::name_colors::valid_color(color)))
+    }
+
     pub async fn get_user_by_login(
         &self,
         access_token: &str,
@@ -583,6 +620,31 @@ mod tests {
     }
     fn client(reply: HelixResponse, req: HelixRequest) -> Helix<Fake> {
         Helix::new(Fake(Arc::new(Mutex::new(vec![(req, reply)]))))
+    }
+
+    /// Colour responses must match the requested identity, including unset and missing rows.
+    #[tokio::test]
+    async fn chat_color_is_identity_bound() {
+        for (body, wanted) in [
+            (
+                r##"{"data":[{"user_id":"123","color":"#123abc"}]}"##,
+                Some("#123abc"),
+            ),
+            (r##"{"data":[{"user_id":"123","color":""}]}"##, None),
+            (r##"{"data":[{"user_id":"456","color":"#ffffff"}]}"##, None),
+            (r##"{"data":[]}"##, None),
+        ] {
+            let (request, _) =
+                expected(HelixMethod::Get, "chat/color", &[("user_id", "123")], None);
+            let api = client(response(200, body), request);
+            assert_eq!(
+                api.get_user_chat_color("secret-token", "123")
+                    .await
+                    .unwrap()
+                    .as_deref(),
+                wanted
+            );
+        }
     }
 
     #[tokio::test]

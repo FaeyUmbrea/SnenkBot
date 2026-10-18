@@ -85,6 +85,13 @@ struct SupportInputs {
     #[config(id = "user", label = "Display name", introduced = 1)]
     user: String,
     #[config(
+        id = "color",
+        label = "Name color",
+        description = "Optional hexadecimal color such as #fffd00.",
+        introduced = 1
+    )]
+    color: Option<String>,
+    #[config(
         id = "tier",
         label = "Subscription tier",
         description = "For example 1000, 2000 or 3000.",
@@ -171,6 +178,7 @@ impl Default for SupportInputs {
             kind: "sub".into(),
             channel_id: "0".into(),
             user: "Test Viewer".into(),
+            color: Some("#fffd00".into()),
             tier: Some("1000".into()),
             amount: Some(1),
             message: Some("Thanks for the stream!".into()),
@@ -407,12 +415,7 @@ impl Capability for ApiAction {
             let (channel, consumers, data) = match self.kind {
                 Action::Chat => {
                     let config: ChatInputs = parse(inputs)?;
-                    if config.color.len() != 7
-                        || !config.color.starts_with('#')
-                        || !config.color.as_bytes()[1..]
-                            .iter()
-                            .all(u8::is_ascii_hexdigit)
-                    {
+                    if !crate::twitch::name_colors::valid_color(&config.color) {
                         return Err(CapabilityError::Failed(
                             "name color must use #RRGGBB".into(),
                         ));
@@ -435,6 +438,14 @@ impl Capability for ApiAction {
                     let timestamp: chrono::DateTime<chrono::Utc> = SystemTime::now().into();
                     let mut data = json!({"id": event_id(), "channelId": config.channel_id,
                         "kind": config.kind, "user": config.user, "timestamp": timestamp.to_rfc3339()});
+                    if let Some(color) = config.color {
+                        if !crate::twitch::name_colors::valid_color(&color) {
+                            return Err(CapabilityError::Failed(
+                                "name color must use #RRGGBB".into(),
+                            ));
+                        }
+                        data["color"] = json!(color);
+                    }
                     if let Some(tier) = config.tier {
                         data["tier"] = json!(tier);
                     }
@@ -738,7 +749,7 @@ mod tests {
                 kind: Action::Support,
                 service: Arc::clone(&service),
             };
-            let inputs = serde_json::from_value(json!({"consumers":[id], "kind":kind, "channel_id":"100", "user":"Viewer", "tier":"1000", "amount":5, "message":"Thanks"})).unwrap();
+            let inputs = serde_json::from_value(json!({"consumers":[id], "kind":kind, "channel_id":"100", "user":"Viewer", "tier":"1000", "amount":5, "message":"Thanks", "color":"#123abc"})).unwrap();
             action
                 .execute(inputs, CancellationToken::new())
                 .await
@@ -750,12 +761,42 @@ mod tests {
             assert_eq!(frame.data["amount"], 5);
             assert_eq!(frame.data["tier"], "1000");
             assert_eq!(frame.data["message"], "Thanks");
+            assert_eq!(frame.data["color"], "#123abc");
             assert!(
                 chrono::DateTime::parse_from_rfc3339(frame.data["timestamp"].as_str().unwrap())
                     .is_ok()
             );
             assert!(ids.insert(frame.data["id"].as_str().unwrap().to_owned()));
         }
+        let support = ApiAction {
+            kind: Action::Support,
+            service: Arc::clone(&service),
+        };
+        let invalid = serde_json::from_value(json!({"consumers":[id], "kind":"sub", "channel_id":"100", "user":"Viewer", "color":"red"})).unwrap();
+        assert!(
+            support
+                .execute(invalid, CancellationToken::new())
+                .await
+                .is_err()
+        );
+        assert!(stream.receiver.try_recv().is_err());
+        let unset = serde_json::from_value(
+            json!({"consumers":[id], "kind":"sub", "channel_id":"100", "user":"Viewer"}),
+        )
+        .unwrap();
+        support
+            .execute(unset, CancellationToken::new())
+            .await
+            .unwrap();
+        assert!(
+            stream
+                .receiver
+                .try_recv()
+                .unwrap()
+                .data
+                .get("color")
+                .is_none()
+        );
         let action = ApiAction {
             kind: Action::Game,
             service: Arc::clone(&service),

@@ -703,11 +703,7 @@ impl EventHub {
                 let color = raw
                     .get("color")
                     .and_then(Value::as_str)
-                    .filter(|color| {
-                        color.len() == 7
-                            && color.starts_with('#')
-                            && color.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit)
-                    })
+                    .filter(|color| crate::twitch::name_colors::valid_color(color))
                     .unwrap_or("#fffd00");
                 self.publish("twitch.chat", json!({ "id": message.message_id, "userId": message.chatter_user_id, "login": message.chatter_user_login, "user": message.chatter_user_name, "color": color, "parts": parts }), CHAT_LIMIT)?;
             }
@@ -990,6 +986,16 @@ fn normalize_support(kind: &str, raw: &Value, envelope: &Value) -> Result<Value,
             .unwrap_or("Anonymous")
     };
     let mut value = json!({"id": id, "channelId": channel_id, "kind": kind, "user": user, "timestamp": timestamp});
+    if raw.get("is_anonymous").and_then(Value::as_bool) != Some(true) {
+        if let Some(id) = field("user_id").filter(|id| !id.is_empty()) {
+            value["userId"] = json!(id);
+        }
+        if let Some(color) =
+            field("color").filter(|color| crate::twitch::name_colors::valid_color(color))
+        {
+            value["color"] = json!(color);
+        }
+    }
     if let Some(tier) = field("tier") {
         value["tier"] = json!(tier);
     }
@@ -1129,6 +1135,29 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
+
+    /// Support items retain viewer colours, but anonymous events never expose identity decoration.
+    #[test]
+    fn support_colors_preserve_identity_and_anonymity() {
+        let envelope = serde_json::json!({"metadata":{"message_id":"event", "message_timestamp":"2026-10-18T12:00:00Z"}});
+        let mut raw = serde_json::json!({"broadcaster_user_id":"1", "user_id":"2", "user_name":"Viewer", "color":"#123abc"});
+        let named = super::normalize_support("sub", &raw, &envelope).unwrap();
+        assert_eq!(named["userId"], "2");
+        assert_eq!(named["color"], "#123abc");
+        raw["is_anonymous"] = serde_json::json!(true);
+        let anonymous = super::normalize_support("bits", &raw, &envelope).unwrap();
+        assert_eq!(anonymous["user"], "Anonymous");
+        assert!(anonymous.get("color").is_none());
+        assert!(anonymous.get("userId").is_none());
+        raw["is_anonymous"] = serde_json::json!(false);
+        raw["color"] = serde_json::json!("invalid");
+        assert!(
+            super::normalize_support("sub", &raw, &envelope)
+                .unwrap()
+                .get("color")
+                .is_none()
+        );
+    }
 
     /// Synthetic deliveries remain private and leave broadcaster snapshots and durable writes alone.
     #[test]

@@ -70,6 +70,7 @@ pub struct TwitchListener<B, T, H> {
     health: Arc<StatusCell<TwitchHealth>>,
     endpoint: String,
     changes: ChannelChanges,
+    name_colors: super::name_colors::NameColors,
     overlay: Option<Arc<crate::api::EventHub>>,
     overlay_demand: Option<watch::Receiver<BTreeSet<String>>>,
     history: Option<EventHistory>,
@@ -100,6 +101,7 @@ where
             health,
             endpoint: EVENTSUB_URL.to_owned(),
             changes: ChannelChanges::default(),
+            name_colors: super::name_colors::NameColors::default(),
             overlay: None,
             overlay_demand: None,
             history: None,
@@ -118,6 +120,80 @@ where
     pub fn with_history(mut self, history: EventHistory) -> Self {
         self.history = Some(history);
         self
+    }
+
+    /// Learns chat colours and enriches named support events without dropping them on lookup failure.
+    async fn enrich_name_color(
+        &mut self,
+        event: &mut super::events::TwitchEvent,
+        envelope: &serde_json::Value,
+    ) {
+        use super::events::TwitchEvent;
+        use super::name_colors::valid_color;
+        if let TwitchEvent::Message(message) = event {
+            if let Some(color) = envelope
+                .pointer("/payload/event/color")
+                .and_then(serde_json::Value::as_str)
+                && (color.is_empty() || valid_color(color))
+            {
+                self.name_colors.remember(
+                    &message.chatter_user_id,
+                    (!color.is_empty()).then(|| color.to_owned()),
+                    Duration::from_secs(if color.is_empty() { 300 } else { 3600 }),
+                    Instant::now(),
+                );
+            }
+            return;
+        }
+        let raw = match event {
+            TwitchEvent::Subscription(raw)
+                if raw.get("is_gift").and_then(serde_json::Value::as_bool) != Some(true) =>
+            {
+                raw
+            }
+            TwitchEvent::SubscriptionMessage(raw)
+            | TwitchEvent::SubscriptionGift(raw)
+            | TwitchEvent::Cheer(raw) => raw,
+            _ => return,
+        };
+        if raw.get("is_anonymous").and_then(serde_json::Value::as_bool) == Some(true) {
+            return;
+        }
+        let Some(id) = raw
+            .get("user_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
+        else {
+            return;
+        };
+        let color = if let Some(cached) = self.name_colors.get(id, Instant::now()) {
+            cached
+        } else {
+            // Optional decoration gets a short deadline; failed lookups leave the event deliverable.
+            let result = tokio::time::timeout(Duration::from_secs(1), async {
+                let authorized = self
+                    .session
+                    .authorize(TwitchCapability::ChannelOwner)
+                    .await
+                    .map_err(|_| ())?;
+                self.helix
+                    .get_user_chat_color(authorized.access_token(), id)
+                    .await
+                    .map_err(|_| ())
+            })
+            .await;
+            let (color, ttl) = match result {
+                Ok(Ok(Some(color))) => (Some(color), 3600),
+                Ok(Ok(None)) => (None, 300),
+                _ => (None, 30),
+            };
+            self.name_colors
+                .remember(id, color.clone(), Duration::from_secs(ttl), Instant::now());
+            color
+        };
+        if let Some(color) = color {
+            raw["color"] = serde_json::json!(color);
+        }
     }
 
     fn desired_kinds(
@@ -461,7 +537,7 @@ where
                                 continue;
                             }
                             match decode_event(&envelope) {
-                                Ok(event) if event.kind().event_type() == subscription_type => {
+                                Ok(mut event) if event.kind().event_type() == subscription_type => {
                                     if let super::events::TwitchEvent::Message(message) = &event
                                         && self.echoes.contains(&message.message_id)
                                     {
@@ -486,6 +562,7 @@ where
                                             on_error("Twitch event has no broadcaster identity for history".into());
                                         }
                                     }
+                                    self.enrich_name_color(&mut event, &envelope).await;
                                     if let Some(overlay) = &self.overlay && overlay_ready
                                         && let Err(error) = overlay.publish_twitch(&event, &envelope) {
                                         on_error(format!("Overlay event could not be queued: {error}"));
@@ -903,6 +980,28 @@ mod tests {
                     retry_after: None,
                 });
             }
+            if request.url.path() == "/helix/chat/color" {
+                let id = request
+                    .url
+                    .query_pairs()
+                    .find(|(key, _)| key == "user_id")
+                    .unwrap()
+                    .1
+                    .to_string();
+                if id == "9" {
+                    return Err(HelixError::InvalidResponse);
+                }
+                if id == "8" {
+                    std::future::pending::<()>().await;
+                }
+                return Ok(HelixResponse {
+                    status: 200,
+                    body: json!({"data":[{"user_id":id, "color":"#123abc"}]})
+                        .to_string()
+                        .into_bytes(),
+                    retry_after: None,
+                });
+            }
             if request.method == HelixMethod::Get {
                 return Ok(HelixResponse { status: 200, body: json!({"data":[{"broadcaster_id":self.channel_broadcaster_id, "broadcaster_login":"owner", "broadcaster_name":"Owner", "game_id":"1", "game_name":"Old game", "title":"Old title"}]}).to_string().into_bytes(), retry_after: None });
             }
@@ -928,6 +1027,46 @@ mod tests {
                 retry_after: None,
             })
         }
+    }
+
+    /// Support colours are cached, anonymous users stay private, and failed lookups preserve delivery.
+    #[tokio::test]
+    async fn support_color_lookup_is_optional_and_cached() {
+        use crate::twitch::events::TwitchEvent;
+        let temporary = tempfile::tempdir().unwrap();
+        let (accounts, session) = fixture(temporary.path());
+        let helix = Arc::new(FakeHelix::default());
+        let (_sender, routes) = watch::channel(vec![]);
+        let mut source = TwitchListener::new(
+            accounts,
+            session,
+            Arc::new(Helix::new(helix.clone())),
+            Arc::new(ChatEchoes::default()),
+            routes,
+            Arc::new(StatusCell::new(TwitchHealth::Disabled)),
+        );
+        for _ in 0..2 {
+            let mut event = TwitchEvent::Cheer(json!({"user_id":"7"}));
+            source.enrich_name_color(&mut event, &json!({})).await;
+            let TwitchEvent::Cheer(raw) = event else {
+                panic!("wrong event");
+            };
+            assert_eq!(raw["color"], "#123abc");
+        }
+        assert_eq!(helix.requests.lock().unwrap().len(), 1);
+        let mut anonymous = TwitchEvent::Cheer(json!({"user_id":"7", "is_anonymous":true}));
+        source.enrich_name_color(&mut anonymous, &json!({})).await;
+        assert_eq!(helix.requests.lock().unwrap().len(), 1);
+        for id in ["9", "9", "8", "8"] {
+            let mut event = TwitchEvent::Cheer(json!({"user_id":id}));
+            source.enrich_name_color(&mut event, &json!({})).await;
+            let TwitchEvent::Cheer(raw) = event else {
+                panic!("wrong event");
+            };
+            assert_eq!(raw["user_id"], id);
+            assert!(raw.get("color").is_none());
+        }
+        assert_eq!(helix.requests.lock().unwrap().len(), 3);
     }
 
     fn command_definition() -> WorkflowDefinition {
