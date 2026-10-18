@@ -64,7 +64,7 @@ describe('shared configuration collection', () => {
 		await fireEvent.input(view.getByLabelText('Address'), { target: { value: 'unsaved' } });
 		await fireEvent.click(view.getByRole('button', { name: 'Replace access' }));
 		expect(act).not.toHaveBeenCalled();
-		const confirmation = view.getByRole('group', { name: 'Replace access confirmation' });
+		const confirmation = view.getByRole('dialog', { name: 'Replace access' });
 		expect(confirmation.textContent).toContain('Old access stops immediately.');
 		await fireEvent.click(within(confirmation).getByRole('button', { name: 'Replace access' }));
 		await waitFor(() =>

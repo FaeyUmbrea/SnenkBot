@@ -33,7 +33,8 @@
 		onOpen,
 		onCopy,
 		onBack,
-		backLabel = 'Back'
+		backLabel = 'Back',
+		showTitle = true
 	}: {
 		accounts: AccountConnections;
 		selectedRole?: string;
@@ -47,6 +48,7 @@
 		onCopy: (attemptId: string, target: 'link' | 'code') => Promise<unknown>;
 		onBack?: () => void;
 		backLabel?: string;
+		showTitle?: boolean;
 	} = $props();
 
 	type Operation = 'start' | 'approve' | 'cancel' | 'open' | 'link' | 'code';
@@ -98,7 +100,9 @@
 			(item) =>
 				item.integration === accounts.integration_id && item.connection === role.descriptor.id
 		);
-		return connection?.detail || 'Signed in';
+		return connection?.state === 'connected'
+			? connection.state_label
+			: connection?.detail || connection?.state_label || 'Signed in';
 	}
 
 	/** Runs one device-code action and discards feedback from an earlier attempt. */
@@ -173,7 +177,7 @@
 </script>
 
 <section class="workflow-editor account-connections-view" aria-label={`${accounts.title} accounts`}>
-	<h1>{accounts.title}</h1>
+	{#if showTitle}<h1>{accounts.title}</h1>{/if}
 	<div class="account-list">
 		{#each roles as role (role.descriptor.id)}
 			{@const descriptor = role.descriptor}
@@ -183,7 +187,10 @@
 					></span>{descriptor.label}{descriptor.optional ? ' · optional' : ''}
 				</h2>
 				<div class="account-row">
-					<p class="account-name">{role.account?.login ?? descriptor.empty_name}</p>
+					<div class="identity">
+						<p class="account-name">{role.account?.login ?? descriptor.empty_name}</p>
+						<p class="account-status">{accountStatus(role)}</p>
+					</div>
 					<button
 						class="secondary connect"
 						disabled={cannotStart}
@@ -192,9 +199,11 @@
 						>{pending.start ? 'Starting…' : role.account ? 'Reconnect' : 'Connect'}</button
 					>
 				</div>
-				<p class="account-status">{accountStatus(role)}</p>
 				<p class="account-description">{descriptor.description}</p>
-				{#if descriptor.help}<p class="account-guidance">{descriptor.help}</p>{/if}
+				{#if descriptor.help}<details class="account-guidance">
+						<summary>Account guidance</summary>
+						<p>{descriptor.help}</p>
+					</details>{/if}
 				{#if authentication?.role === descriptor.id && authentication.phase.state !== 'connected' && authentication.phase.state !== 'cancelled'}
 					<div class="authentication-panel" aria-label={`${descriptor.label} sign-in`}>
 						{#if authentication.phase.state === 'starting'}
@@ -278,7 +287,7 @@
 <style>
 	.account-connections-view {
 		width: 100%;
-		max-width: 920px;
+
 		padding-top: 16px;
 	}
 	h1 {
@@ -290,11 +299,10 @@
 	.account-list {
 		display: flex;
 		flex-direction: column;
-		gap: 32px;
+		gap: 16px;
 	}
 	.account-panel {
 		padding: 20px;
-		min-height: 211px;
 		border-radius: 8px;
 		background: var(--side);
 	}
@@ -302,7 +310,7 @@
 		display: flex;
 		align-items: center;
 		gap: 16px;
-		margin: 0 0 20px;
+		margin: 0 0 16px;
 		font-size: 16px;
 		font-weight: 600;
 	}
@@ -321,7 +329,7 @@
 	}
 	.account-name {
 		margin: 0;
-		font-size: 20px;
+		font-size: 18px;
 		overflow-wrap: anywhere;
 	}
 	.account-status,
@@ -330,10 +338,10 @@
 		font-size: 13px;
 	}
 	.account-status {
-		margin: 12px 0 24px;
+		margin: 4px 0 0;
 	}
 	.account-description {
-		margin: 0;
+		margin: 16px 0 0;
 	}
 	button {
 		min-height: 32px;
@@ -347,13 +355,13 @@
 		background: var(--surface);
 	}
 	button.connect {
-		min-width: 156px;
+		min-width: 104px;
 	}
 	.account-guidance {
-		margin: 32px 0 0;
+		margin: 16px 0 0;
 		max-width: 600px;
 		color: var(--muted);
-		line-height: 1.25;
+		line-height: 1.5;
 	}
 	.authentication-panel {
 		margin-top: 24px;
@@ -418,9 +426,6 @@
 		.account-row {
 			align-items: flex-start;
 			flex-direction: column;
-		}
-		.account-panel {
-			min-height: 211px;
 		}
 		button.connect {
 			min-width: 120px;

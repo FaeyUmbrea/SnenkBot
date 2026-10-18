@@ -125,6 +125,9 @@ export function createDesktopClient(transport: DesktopTransport = invoke) {
 	}
 
 	return {
+		eventTestOptions: () => request<import('./contracts').EventTestOptions>('event_test_options'),
+		eventTestSend: (data: import('./contracts').SendTestEvent) =>
+			request<void>('event_test_send', data),
 		eventsList: () => request<import('./contracts').EventPage>('events_list'),
 		eventsTargets: (data: import('./contracts').EventIdentity) =>
 			request<import('./contracts').EventTargetPage>('events_targets', data),

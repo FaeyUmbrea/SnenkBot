@@ -37,6 +37,12 @@ pub struct ProviderSettings {
     pub steamgriddb_enabled: bool,
     #[config(id = "emotes_enabled", label = "FFZ and BTTV emotes", introduced = 1)]
     pub emotes_enabled: bool,
+    #[serde(default)]
+    #[config(id = "ffz_enabled", label = "FrankerFaceZ", introduced = 1)]
+    pub ffz_enabled: bool,
+    #[serde(default)]
+    #[config(id = "bttv_enabled", label = "BetterTTV", introduced = 1)]
+    pub bttv_enabled: bool,
     #[config(id = "pronouns_enabled", label = "Pronouns", introduced = 1)]
     pub pronouns_enabled: bool,
 }
@@ -45,19 +51,21 @@ pub struct ProviderSettings {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProviderId {
     SteamGridDb,
-    Emotes,
+    Ffz,
+    Bttv,
     Pronouns,
 }
 
 impl ProviderId {
     /// All compiled providers in stable display order.
-    pub const ALL: [Self; 3] = [Self::SteamGridDb, Self::Emotes, Self::Pronouns];
+    pub const ALL: [Self; 4] = [Self::SteamGridDb, Self::Ffz, Self::Bttv, Self::Pronouns];
 
     /// Stable document identifier for this independently configured provider.
     pub fn document_id(self) -> &'static str {
         match self {
             Self::SteamGridDb => SteamGridDbSettings::INTEGRATION.expect("provider integration ID"),
-            Self::Emotes => EmotesSettings::INTEGRATION.expect("provider integration ID"),
+            Self::Ffz => FfzSettings::INTEGRATION.expect("provider integration ID"),
+            Self::Bttv => BttvSettings::INTEGRATION.expect("provider integration ID"),
             Self::Pronouns => PronounsSettings::INTEGRATION.expect("provider integration ID"),
         }
     }
@@ -66,7 +74,8 @@ impl ProviderId {
     pub fn title(self) -> &'static str {
         match self {
             Self::SteamGridDb => SteamGridDbSettings::SCHEMA.title,
-            Self::Emotes => EmotesSettings::SCHEMA.title,
+            Self::Ffz => FfzSettings::SCHEMA.title,
+            Self::Bttv => BttvSettings::SCHEMA.title,
             Self::Pronouns => PronounsSettings::SCHEMA.title,
         }
     }
@@ -75,7 +84,8 @@ impl ProviderId {
     fn definition(self) -> &'static str {
         match self {
             Self::SteamGridDb => "snenkbot.provider.steamgriddb",
-            Self::Emotes => "snenkbot.provider.emotes",
+            Self::Ffz => "snenkbot.provider.ffz",
+            Self::Bttv => "snenkbot.provider.bttv",
             Self::Pronouns => "snenkbot.provider.pronouns",
         }
     }
@@ -84,8 +94,9 @@ impl ProviderId {
     pub(crate) fn index(self) -> usize {
         match self {
             Self::SteamGridDb => 0,
-            Self::Emotes => 1,
-            Self::Pronouns => 2,
+            Self::Ffz => 1,
+            Self::Bttv => 2,
+            Self::Pronouns => 3,
         }
     }
 
@@ -93,7 +104,8 @@ impl ProviderId {
     pub fn enabled(self, settings: &ProviderSettings) -> bool {
         match self {
             Self::SteamGridDb => settings.steamgriddb_enabled,
-            Self::Emotes => settings.emotes_enabled,
+            Self::Ffz => settings.ffz_enabled || settings.emotes_enabled,
+            Self::Bttv => settings.bttv_enabled || settings.emotes_enabled,
             Self::Pronouns => settings.pronouns_enabled,
         }
     }
@@ -102,7 +114,8 @@ impl ProviderId {
     pub fn set_enabled(self, settings: &mut ProviderSettings, enabled: bool) {
         match self {
             Self::SteamGridDb => settings.steamgriddb_enabled = enabled,
-            Self::Emotes => settings.emotes_enabled = enabled,
+            Self::Ffz => settings.ffz_enabled = enabled,
+            Self::Bttv => settings.bttv_enabled = enabled,
             Self::Pronouns => settings.pronouns_enabled = enabled,
         }
     }
@@ -141,6 +154,38 @@ pub struct EmotesSettings {
     pub enabled: bool,
 }
 
+/// FrankerFaceZ emote configuration.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, crate::ConfigSchema)]
+#[cfg_attr(feature = "desktop-contracts", derive(specta::Type))]
+#[serde(deny_unknown_fields)]
+#[config(
+    id = "snenkbot.provider.ffz",
+    version = 1,
+    title = "FrankerFaceZ",
+    category = "devices",
+    integration = "ffz"
+)]
+pub struct FfzSettings {
+    #[config(id = "enabled", label = "Enabled", introduced = 1)]
+    pub enabled: bool,
+}
+
+/// BetterTTV emote configuration.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, crate::ConfigSchema)]
+#[cfg_attr(feature = "desktop-contracts", derive(specta::Type))]
+#[serde(deny_unknown_fields)]
+#[config(
+    id = "snenkbot.provider.bttv",
+    version = 1,
+    title = "BetterTTV",
+    category = "devices",
+    integration = "bttv"
+)]
+pub struct BttvSettings {
+    #[config(id = "enabled", label = "Enabled", introduced = 1)]
+    pub enabled: bool,
+}
+
 /// Pronouns lookup configuration.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, crate::ConfigSchema)]
 #[cfg_attr(feature = "desktop-contracts", derive(specta::Type))]
@@ -170,8 +215,8 @@ pub enum ProviderSettingsError {
 #[derive(Clone)]
 pub struct LoadedProviderSettings {
     pub value: ProviderSettings,
-    configured: [bool; 3],
-    snapshots: [Option<ConfigSnapshot>; 3],
+    configured: [bool; 4],
+    snapshots: [Option<ConfigSnapshot>; 4],
 }
 
 impl LoadedProviderSettings {
@@ -214,27 +259,55 @@ impl ProviderSettingsStore {
                 configured: true,
                 snapshot: Some(snapshot),
             }),
-            Err(StoreError::NotFound(_)) => match self.store.load(DOCUMENT_ID) {
+            Err(StoreError::NotFound(_)) => self.load_legacy(provider),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Reads the previous shared emote document without changing its contents.
+    fn load_legacy(
+        &self,
+        provider: ProviderId,
+    ) -> Result<LoadedProviderSetting, ProviderSettingsError> {
+        if matches!(provider, ProviderId::Ffz | ProviderId::Bttv) {
+            match self.store.load("emotes") {
                 Ok(snapshot) => {
                     let config = snapshot.config();
-                    if config.definition != DEFINITION || config.version != VERSION {
+                    if config.definition != "snenkbot.provider.emotes" || config.version != VERSION
+                    {
                         return Err(ProviderSettingsError::InvalidFormat);
                     }
-                    let legacy: ProviderSettings = serde_json::from_value(config.data.clone())
+                    let legacy: EmotesSettings = serde_json::from_value(config.data.clone())
                         .map_err(|_| ProviderSettingsError::InvalidFormat)?;
-                    Ok(LoadedProviderSetting {
-                        enabled: provider.enabled(&legacy),
+                    return Ok(LoadedProviderSetting {
+                        enabled: legacy.enabled,
                         configured: true,
                         snapshot: None,
-                    })
+                    });
                 }
-                Err(StoreError::NotFound(_)) => Ok(LoadedProviderSetting {
-                    enabled: false,
-                    configured: false,
+                Err(StoreError::NotFound(_)) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        match self.store.load(DOCUMENT_ID) {
+            Ok(snapshot) => {
+                let config = snapshot.config();
+                if config.definition != DEFINITION || config.version != VERSION {
+                    return Err(ProviderSettingsError::InvalidFormat);
+                }
+                let legacy: ProviderSettings = serde_json::from_value(config.data.clone())
+                    .map_err(|_| ProviderSettingsError::InvalidFormat)?;
+                Ok(LoadedProviderSetting {
+                    enabled: provider.enabled(&legacy),
+                    configured: true,
                     snapshot: None,
-                }),
-                Err(error) => Err(error.into()),
-            },
+                })
+            }
+            Err(StoreError::NotFound(_)) => Ok(LoadedProviderSetting {
+                enabled: false,
+                configured: false,
+                snapshot: None,
+            }),
             Err(error) => Err(error.into()),
         }
     }
@@ -242,8 +315,8 @@ impl ProviderSettingsStore {
     /// Collects all switches for callers that require an entirely healthy aggregate.
     pub fn load(&self) -> Result<LoadedProviderSettings, ProviderSettingsError> {
         let mut value = ProviderSettings::default();
-        let mut configured = [false; 3];
-        let mut snapshots: [Option<ConfigSnapshot>; 3] = std::array::from_fn(|_| None);
+        let mut configured = [false; 4];
+        let mut snapshots: [Option<ConfigSnapshot>; 4] = std::array::from_fn(|_| None);
         for provider in ProviderId::ALL {
             let loaded = self.load_provider(provider)?;
             provider.set_enabled(&mut value, loaded.enabled);
@@ -318,9 +391,8 @@ fn decode_scoped(
         ProviderId::SteamGridDb => {
             serde_json::from_value::<SteamGridDbSettings>(data).map(|value| value.enabled)
         }
-        ProviderId::Emotes => {
-            serde_json::from_value::<EmotesSettings>(data).map(|value| value.enabled)
-        }
+        ProviderId::Ffz => serde_json::from_value::<FfzSettings>(data).map(|value| value.enabled),
+        ProviderId::Bttv => serde_json::from_value::<BttvSettings>(data).map(|value| value.enabled),
         ProviderId::Pronouns => {
             serde_json::from_value::<PronounsSettings>(data).map(|value| value.enabled)
         }
@@ -332,7 +404,8 @@ fn decode_scoped(
 fn encode_scoped(provider: ProviderId, enabled: bool) -> serde_json::Value {
     match provider {
         ProviderId::SteamGridDb => serde_json::to_value(SteamGridDbSettings { enabled }),
-        ProviderId::Emotes => serde_json::to_value(EmotesSettings { enabled }),
+        ProviderId::Ffz => serde_json::to_value(FfzSettings { enabled }),
+        ProviderId::Bttv => serde_json::to_value(BttvSettings { enabled }),
         ProviderId::Pronouns => serde_json::to_value(PronounsSettings { enabled }),
     }
     .expect("provider settings serialize")
@@ -353,15 +426,15 @@ mod tests {
         };
         let store = ProviderSettingsStore::new(&paths);
         let initial = store.load().unwrap();
-        assert!(!initial.configured(ProviderId::Emotes));
+        assert!(!initial.configured(ProviderId::Ffz));
         store
-            .save_enabled(&initial, ProviderId::Emotes, false)
+            .save_enabled(&initial, ProviderId::Ffz, false)
             .unwrap();
         let saved = store.load().unwrap();
-        assert!(saved.configured(ProviderId::Emotes));
+        assert!(saved.configured(ProviderId::Ffz));
         assert!(!saved.configured(ProviderId::SteamGridDb));
         assert!(!saved.configured(ProviderId::Pronouns));
-        assert!(!saved.value.emotes_enabled);
+        assert!(!saved.value.ffz_enabled);
         store
             .save_enabled(&initial, ProviderId::Pronouns, true)
             .unwrap();
@@ -369,7 +442,7 @@ mod tests {
         assert!(merged.configured(ProviderId::Pronouns));
         assert!(merged.value.pronouns_enabled);
         assert!(matches!(
-            store.save_enabled(&initial, ProviderId::Emotes, true),
+            store.save_enabled(&initial, ProviderId::Ffz, true),
             Err(ProviderSettingsError::Store(StoreError::AlreadyExists(_)))
         ));
     }
@@ -391,6 +464,7 @@ mod tests {
                 steamgriddb_enabled: true,
                 emotes_enabled: false,
                 pronouns_enabled: true,
+                ..Default::default()
             })
             .unwrap(),
         };
@@ -401,17 +475,15 @@ mod tests {
         let loaded = store.load().unwrap();
         for provider in [
             ProviderId::SteamGridDb,
-            ProviderId::Emotes,
+            ProviderId::Ffz,
             ProviderId::Pronouns,
         ] {
             assert!(loaded.configured(provider));
         }
         assert!(loaded.value.steamgriddb_enabled);
-        store
-            .save_enabled(&loaded, ProviderId::Emotes, true)
-            .unwrap();
+        store.save_enabled(&loaded, ProviderId::Ffz, true).unwrap();
         let current = store.load().unwrap();
-        assert!(current.value.emotes_enabled);
+        assert!(current.value.ffz_enabled);
         assert!(current.value.steamgriddb_enabled);
         assert!(current.value.pronouns_enabled);
         assert_eq!(config_store.load(DOCUMENT_ID).unwrap().config(), &legacy);
@@ -427,23 +499,49 @@ mod tests {
             state: directory.path().join("state"),
         };
         let store = ProviderSettingsStore::new(&paths);
-        let emotes = store.load_provider(ProviderId::Emotes).unwrap();
-        store
-            .save_provider(&emotes, ProviderId::Emotes, true)
-            .unwrap();
+        let emotes = store.load_provider(ProviderId::Ffz).unwrap();
+        store.save_provider(&emotes, ProviderId::Ffz, true).unwrap();
         let legacy_file = paths.integrations_dir().join("providers/providers.json");
         std::fs::write(&legacy_file, "{invalid-json").unwrap();
 
-        assert!(store.load_provider(ProviderId::Emotes).unwrap().enabled);
+        assert!(store.load_provider(ProviderId::Ffz).unwrap().enabled);
         assert!(store.load_provider(ProviderId::Pronouns).is_err());
-        let emotes = store.load_provider(ProviderId::Emotes).unwrap();
+        let emotes = store.load_provider(ProviderId::Ffz).unwrap();
         store
-            .save_provider(&emotes, ProviderId::Emotes, false)
+            .save_provider(&emotes, ProviderId::Ffz, false)
             .unwrap();
-        assert!(!store.load_provider(ProviderId::Emotes).unwrap().enabled);
+        assert!(!store.load_provider(ProviderId::Ffz).unwrap().enabled);
         assert_eq!(
             std::fs::read_to_string(legacy_file).unwrap(),
             "{invalid-json"
         );
+    }
+    /// Each emote provider inherits old setup until its own document overrides that switch.
+    #[test]
+    fn split_emotes_preserve_legacy_and_save_independently() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths {
+            config: directory.path().join("config"),
+            data: directory.path().join("data"),
+            state: directory.path().join("state"),
+        };
+        let config_store = ConfigStore::new(paths.integrations_dir().join("providers"));
+        let legacy = StoredConfig {
+            definition: "snenkbot.provider.emotes".into(),
+            version: 1,
+            data: serde_json::json!({"enabled": true}),
+        };
+        config_store.create("emotes", &legacy, |_| Ok(())).unwrap();
+        let store = ProviderSettingsStore::new(&paths);
+        assert!(store.load_provider(ProviderId::Ffz).unwrap().enabled);
+        assert!(store.load_provider(ProviderId::Bttv).unwrap().enabled);
+        let ffz = store.load_provider(ProviderId::Ffz).unwrap();
+        store.save_provider(&ffz, ProviderId::Ffz, false).unwrap();
+        assert!(!store.load_provider(ProviderId::Ffz).unwrap().enabled);
+        assert!(store.load_provider(ProviderId::Bttv).unwrap().enabled);
+        let bttv = store.load_provider(ProviderId::Bttv).unwrap();
+        store.save_provider(&bttv, ProviderId::Bttv, false).unwrap();
+        assert!(!store.load_provider(ProviderId::Bttv).unwrap().enabled);
+        assert_eq!(config_store.load("emotes").unwrap().config(), &legacy);
     }
 }

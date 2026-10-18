@@ -36,6 +36,9 @@ const connection = (
 	connection: connectionId,
 	title: `Friendly ${connectionId}`,
 	state,
+	show_when_healthy: true,
+	state_label:
+		state === 'connected' ? 'Connected' : state === 'error' ? 'Connection error' : 'Connecting',
 	detail: 'Local connection detail'
 });
 

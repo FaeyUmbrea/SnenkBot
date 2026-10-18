@@ -89,6 +89,8 @@ describe('AccountConnectionsView', () => {
 					connection: 'owner',
 					title: 'Owner',
 					state: 'error' as const,
+					show_when_healthy: true,
+					state_label: 'Needs attention',
 					detail: 'Needs reconnection'
 				},
 				{
@@ -96,6 +98,8 @@ describe('AccountConnectionsView', () => {
 					connection: 'helper',
 					title: 'Helper',
 					state: 'error' as const,
+					show_when_healthy: true,
+					state_label: 'Needs attention',
 					detail: 'Unavailable'
 				}
 			],

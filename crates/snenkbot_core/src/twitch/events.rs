@@ -17,6 +17,59 @@ const AD_BREAK_EVENT: &str = "ad_break.begin";
 const CHANNEL_UPDATE_EVENT: &str = "channel.updated";
 pub const DETAILS_CHANGED_EVENT: &str = "channel.details_changed";
 
+/// Editable command filters described by the same Rust field macros as action inputs.
+#[derive(Debug, Default, serde::Serialize, crate::ConfigSchema)]
+#[config(
+    id = "twitch.chat.command.filters",
+    version = 1,
+    title = "Twitch chat command"
+)]
+pub struct CommandFilters {
+    #[config(id = "command", label = "Command", introduced = 1)]
+    pub command: String,
+    #[config(id = "aliases", label = "Aliases", introduced = 1)]
+    pub aliases: Vec<String>,
+    #[config(
+        id = "broadcaster_or_moderator",
+        label = "Broadcaster or moderator only",
+        introduced = 1
+    )]
+    pub broadcaster_or_moderator: bool,
+}
+
+/// Optional Twitch notification type used by the generated filter editor.
+#[derive(Debug, Default, serde::Serialize, crate::ConfigSchema)]
+#[config(
+    id = "twitch.chat.notification.filters",
+    version = 1,
+    title = "Twitch chat notification"
+)]
+pub struct NotificationFilters {
+    #[config(id = "notice_type", label = "Notification type", introduced = 1)]
+    pub notice_type: Option<String>,
+}
+
+/// Returns this integration's generated filter fields and existing event title.
+pub fn trigger_configuration(kind: &TriggerKind) -> Option<crate::schema::ConfigSchema> {
+    use crate::schema::DescribeConfig;
+    let title = trigger_title(kind)?;
+    let TriggerKind::IntegrationEvent { event, .. } = kind else {
+        return None;
+    };
+    let fields = match event.as_str() {
+        COMMAND_EVENT => CommandFilters::SCHEMA.fields,
+        NOTIFICATION_EVENT => NotificationFilters::SCHEMA.fields,
+        _ => &[],
+    };
+    Some(crate::schema::ConfigSchema {
+        id: "twitch.trigger",
+        version: 1,
+        title,
+        fields,
+        outputs: &[],
+    })
+}
+
 pub fn trigger_title(kind: &TriggerKind) -> Option<&'static str> {
     let TriggerKind::IntegrationEvent {
         integration, event, ..

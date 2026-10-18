@@ -17,6 +17,7 @@ const owner: ConfigurationSnapshot = {
 	values: {},
 	credential: null,
 	authorization: null,
+	actions: [],
 	authorization_ready: false,
 	collection: {
 		id: 'api.consumers',

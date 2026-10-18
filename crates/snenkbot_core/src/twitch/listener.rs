@@ -859,7 +859,7 @@ mod tests {
                     "client_id": CLIENT_ID,
                     "user_id": self.0,
                     "login": "owner",
-                    "scopes": ["channel:manage:broadcast", "channel:read:ads", "user:read:chat", "user:write:chat"],
+                    "scopes": ["channel:manage:broadcast", "channel:read:ads", "channel:read:subscriptions", "bits:read", "user:read:chat", "user:write:chat"],
                     "expires_in": 3600
                 }).to_string().into_bytes(),
                 retry_after: None,
@@ -968,6 +968,8 @@ mod tests {
         broadcaster_id: &'static str,
     ) -> (TestAccounts, TestSession) {
         let mut scopes = vec![
+            "channel:read:subscriptions",
+            "bits:read",
             "channel:manage:broadcast",
             "user:read:chat",
             "user:write:chat",
@@ -1303,7 +1305,7 @@ mod tests {
             data: root.path().join("data"),
             state: root.path().join("state"),
         };
-        let overlay = EventHub::new(&paths, false, 500);
+        let overlay = EventHub::new(&paths, 500);
         let mut definition = command_definition();
         definition.triggers[0].kind = TriggerKind::IntegrationEvent {
             integration: "twitch".into(),

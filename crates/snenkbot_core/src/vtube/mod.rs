@@ -7,7 +7,10 @@ pub mod protocol;
 pub mod routes;
 pub mod settings;
 
-pub use routes::{VtubeActivation, VtubeRoute, routes_for, trigger_title, trigger_value_schema};
+pub use routes::{
+    VtubeActivation, VtubeRoute, routes_for, trigger_configuration, trigger_title,
+    trigger_value_schema,
+};
 
 use std::collections::BTreeSet;
 use std::sync::{Arc, RwLock};
@@ -543,6 +546,14 @@ impl ConfigurationStatus for VtubeIntegration {
             connection: "connection".into(),
             title: "VTube Studio".into(),
             state,
+            show_when_healthy: true,
+            state_label: match state {
+                ConnectionState::Inactive => "Disabled",
+                ConnectionState::Connecting => "Connecting",
+                ConnectionState::Connected => "Connected",
+                ConnectionState::Error => "Error",
+            }
+            .into(),
             detail,
         }]
     }

@@ -16,8 +16,8 @@ use snenk_bot::obs::{
     settings::{LoadedObsSettings, ObsSettings, ObsSettingsError},
 };
 use snenk_bot::providers::{
-    EmotesSettings, PronounsSettings, ProviderId, ProviderIntegrationError, ProviderSettingsError,
-    SteamGridDbSettings,
+    BttvSettings, FfzSettings, PronounsSettings, ProviderId, ProviderIntegrationError,
+    ProviderSettingsError, SteamGridDbSettings,
 };
 pub use snenk_bot::schema::ConfigurationCategory;
 use snenk_bot::schema::{ConfigSchema, DescribeConfig};
@@ -41,8 +41,10 @@ pub enum ConnectionModule {
     Api,
     /// SteamGridDB artwork lookup settings.
     Steamgriddb,
-    /// FFZ and BetterTTV emote lookup settings.
-    Emotes,
+    /// FrankerFaceZ emote lookup settings.
+    Ffz,
+    /// BetterTTV emote lookup settings.
+    Bttv,
     /// Pronouns lookup settings.
     Pronouns,
 }
@@ -109,18 +111,22 @@ pub fn configuration_catalog(services: &AppServices) -> Vec<ConfigurationCatalog
         form_entry::<ApiSettings>(ConnectionModule::Api, api_configured, api_error),
     ];
     for provider in snenk_bot::providers::catalog() {
+        let Some(configuration) = provider.configuration else {
+            continue;
+        };
         let (configured, error) = catalog_state(
             services
                 .providers()
-                .configured(provider.configuration)
+                .configured(configuration)
                 .map_err(provider_error),
         );
-        entries.push(match provider.configuration {
+        entries.push(match configuration {
             ProviderId::SteamGridDb => {
                 form_entry::<SteamGridDbSettings>(ConnectionModule::Steamgriddb, configured, error)
             }
-            ProviderId::Emotes => {
-                form_entry::<EmotesSettings>(ConnectionModule::Emotes, configured, error)
+            ProviderId::Ffz => form_entry::<FfzSettings>(ConnectionModule::Ffz, configured, error),
+            ProviderId::Bttv => {
+                form_entry::<BttvSettings>(ConnectionModule::Bttv, configured, error)
             }
             ProviderId::Pronouns => {
                 form_entry::<PronounsSettings>(ConnectionModule::Pronouns, configured, error)
@@ -221,6 +227,8 @@ pub struct ConfigurationSnapshot {
     pub collection: Option<snenk_bot::schema::ConfigurationCollectionDescriptor>,
     /// Whether the saved configuration meets the declared pairing prerequisite.
     pub authorization_ready: bool,
+    /// Tools declared by the owner of this settings form.
+    pub actions: Vec<snenk_bot::schema::ConfigurationActionDescriptor>,
 }
 
 #[derive(Debug, Serialize, Type)]
@@ -269,7 +277,8 @@ pub(crate) enum LoadedConnectionSettings {
     Api(ApiSettings),
     ApiConsumer(ConsumerSummary),
     Steamgriddb(SteamGridDbSettings),
-    Emotes(EmotesSettings),
+    Ffz(FfzSettings),
+    Bttv(BttvSettings),
     Pronouns(PronounsSettings),
 }
 
@@ -445,19 +454,31 @@ impl ConfigurationSessions {
                 }
                 Ok((LoadedConnectionSettings::Steamgriddb(value), outcome))
             }
-            LoadedConnectionSettings::Emotes(original) => {
-                let value = parse_values::<EmotesSettings>(values)?;
+            LoadedConnectionSettings::Ffz(original) => {
+                let value = parse_values::<FfzSettings>(values)?;
                 let providers = services.providers();
                 let outcome = providers
-                    .save_enabled(ProviderId::Emotes, original.enabled, value.enabled)
+                    .save_enabled(ProviderId::Ffz, original.enabled, value.enabled)
+                    .map_err(provider_error)?;
+                let saved = providers.enabled(ProviderId::Ffz).map_err(provider_error)?;
+                if saved != value.enabled {
+                    return Err(readback_conflict());
+                }
+                Ok((LoadedConnectionSettings::Ffz(value), outcome))
+            }
+            LoadedConnectionSettings::Bttv(original) => {
+                let value = parse_values::<BttvSettings>(values)?;
+                let providers = services.providers();
+                let outcome = providers
+                    .save_enabled(ProviderId::Bttv, original.enabled, value.enabled)
                     .map_err(provider_error)?;
                 let saved = providers
-                    .enabled(ProviderId::Emotes)
+                    .enabled(ProviderId::Bttv)
                     .map_err(provider_error)?;
                 if saved != value.enabled {
                     return Err(readback_conflict());
                 }
-                Ok((LoadedConnectionSettings::Emotes(value), outcome))
+                Ok((LoadedConnectionSettings::Bttv(value), outcome))
             }
             LoadedConnectionSettings::Pronouns(original) => {
                 let value = parse_values::<PronounsSettings>(values)?;
@@ -596,7 +617,7 @@ fn invalid_directory_field() -> ConfigurationError {
 
 impl ConfigurationSession {
     fn snapshot(&self, id: &str) -> Result<ConfigurationSnapshot, ConfigurationError> {
-        let (module, schema, defaults, values, credential, authorization, collection) =
+        let (module, schema, defaults, values, credential, authorization, collection, actions) =
             match &self.loaded {
                 LoadedConnectionSettings::Api(value) => (
                     ConnectionModule::Api,
@@ -606,6 +627,7 @@ impl ConfigurationSession {
                     ApiSettings::CREDENTIAL,
                     ApiSettings::AUTHORIZATION,
                     ApiSettings::COLLECTION,
+                    ApiSettings::ACTIONS.to_vec(),
                 ),
                 LoadedConnectionSettings::ApiConsumer(value) => (
                     ConnectionModule::Api,
@@ -615,6 +637,7 @@ impl ConfigurationSession {
                     CreateApiConsumer::CREDENTIAL,
                     CreateApiConsumer::AUTHORIZATION,
                     CreateApiConsumer::COLLECTION,
+                    CreateApiConsumer::ACTIONS.to_vec(),
                 ),
                 LoadedConnectionSettings::Steamgriddb(value) => (
                     ConnectionModule::Steamgriddb,
@@ -624,15 +647,27 @@ impl ConfigurationSession {
                     SteamGridDbSettings::CREDENTIAL,
                     SteamGridDbSettings::AUTHORIZATION,
                     SteamGridDbSettings::COLLECTION,
+                    SteamGridDbSettings::ACTIONS.to_vec(),
                 ),
-                LoadedConnectionSettings::Emotes(value) => (
-                    ConnectionModule::Emotes,
-                    *EmotesSettings::SCHEMA,
-                    to_values(&EmotesSettings::default())?,
+                LoadedConnectionSettings::Ffz(value) => (
+                    ConnectionModule::Ffz,
+                    *FfzSettings::SCHEMA,
+                    to_values(&FfzSettings::default())?,
                     to_values(value)?,
-                    EmotesSettings::CREDENTIAL,
-                    EmotesSettings::AUTHORIZATION,
-                    EmotesSettings::COLLECTION,
+                    FfzSettings::CREDENTIAL,
+                    FfzSettings::AUTHORIZATION,
+                    FfzSettings::COLLECTION,
+                    FfzSettings::ACTIONS.to_vec(),
+                ),
+                LoadedConnectionSettings::Bttv(value) => (
+                    ConnectionModule::Bttv,
+                    *BttvSettings::SCHEMA,
+                    to_values(&BttvSettings::default())?,
+                    to_values(value)?,
+                    BttvSettings::CREDENTIAL,
+                    BttvSettings::AUTHORIZATION,
+                    BttvSettings::COLLECTION,
+                    BttvSettings::ACTIONS.to_vec(),
                 ),
                 LoadedConnectionSettings::Pronouns(value) => (
                     ConnectionModule::Pronouns,
@@ -642,6 +677,7 @@ impl ConfigurationSession {
                     PronounsSettings::CREDENTIAL,
                     PronounsSettings::AUTHORIZATION,
                     PronounsSettings::COLLECTION,
+                    PronounsSettings::ACTIONS.to_vec(),
                 ),
 
                 LoadedConnectionSettings::Obs(loaded) => (
@@ -652,6 +688,7 @@ impl ConfigurationSession {
                     ObsSettings::CREDENTIAL,
                     ObsSettings::AUTHORIZATION,
                     ObsSettings::COLLECTION,
+                    ObsSettings::ACTIONS.to_vec(),
                 ),
                 LoadedConnectionSettings::VtubeStudio(loaded) => (
                     ConnectionModule::VtubeStudio,
@@ -661,6 +698,7 @@ impl ConfigurationSession {
                     VtubeSettings::CREDENTIAL,
                     VtubeSettings::AUTHORIZATION,
                     VtubeSettings::COLLECTION,
+                    VtubeSettings::ACTIONS.to_vec(),
                 ),
             };
         let authorization_ready = authorization
@@ -684,6 +722,7 @@ impl ConfigurationSession {
             authorization,
             collection,
             authorization_ready,
+            actions,
         })
     }
 }
@@ -848,7 +887,7 @@ mod tests {
             ))
             .unwrap();
         let emotes = sessions
-            .open(LoadedConnectionSettings::Emotes(EmotesSettings::default()))
+            .open(LoadedConnectionSettings::Ffz(FfzSettings::default()))
             .unwrap();
         assert!(matches!(
             sessions.credential_module(&obs.session_id, "obs-password"),
@@ -1176,7 +1215,6 @@ mod tests {
 
         let saved = ApiSettings {
             port: 38765,
-            record_support: true,
             ..ApiSettings::default()
         };
         let result = sessions
@@ -1242,7 +1280,10 @@ mod tests {
             ))
             .unwrap();
         let emotes = sessions
-            .open(LoadedConnectionSettings::Emotes(EmotesSettings::default()))
+            .open(LoadedConnectionSettings::Ffz(FfzSettings::default()))
+            .unwrap();
+        let bttv = sessions
+            .open(LoadedConnectionSettings::Bttv(BttvSettings::default()))
             .unwrap();
         let pronouns = sessions
             .open(LoadedConnectionSettings::Pronouns(
@@ -1251,7 +1292,8 @@ mod tests {
             .unwrap();
         for (snapshot, id) in [
             (&steam, "snenkbot.provider.steamgriddb"),
-            (&emotes, "snenkbot.provider.emotes"),
+            (&emotes, "snenkbot.provider.ffz"),
+            (&bttv, "snenkbot.provider.bttv"),
             (&pronouns, "snenkbot.provider.pronouns"),
         ] {
             assert_eq!(snapshot.schema.id, id);
@@ -1261,11 +1303,12 @@ mod tests {
         }
         assert_eq!(steam.credential.unwrap().id, "steamgriddb-key");
         assert!(emotes.credential.is_none());
+        assert!(bttv.credential.is_none());
         assert!(pronouns.credential.is_none());
         let mut invalid = emotes.values.clone();
         invalid.insert("steamgriddb_enabled".into(), serde_json::json!(true));
         assert_eq!(
-            parse_values::<EmotesSettings>(invalid).unwrap_err().code,
+            parse_values::<FfzSettings>(invalid).unwrap_err().code,
             ConfigurationErrorCode::InvalidValues
         );
     }

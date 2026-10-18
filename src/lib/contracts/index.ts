@@ -272,6 +272,8 @@ export type ConfigurationSnapshot = {
 	collection: ConfigurationCollectionDescriptor | null,
 	/**  Whether the saved configuration meets the declared pairing prerequisite. */
 	authorization_ready: boolean,
+	/**  Tools declared by the owner of this settings form. */
+	actions: ConfigurationActionDescriptor[],
 };
 
 /**  Native configuration owner selected by the desktop settings directory. */
@@ -284,18 +286,24 @@ export type ConnectionModule =
 "api" |
 /**  SteamGridDB artwork lookup settings. */
 "steamgriddb" |
-/**  FFZ and BetterTTV emote lookup settings. */
-"emotes" |
+/**  FrankerFaceZ emote lookup settings. */
+"ffz" |
+/**  BetterTTV emote lookup settings. */
+"bttv" |
 /**  Pronouns lookup settings. */
 "pronouns";
 
 export type ConnectionState = "inactive" | "connecting" | "connected" | "error";
 
+/**  A visible status row published by its integration with domain-specific wording. */
 export type ConnectionStatus = {
 	integration: string,
 	connection: string,
 	title: string,
 	state: ConnectionState,
+	state_label: string,
+	/**  Keep healthy rows in the global connection menu; unhealthy rows always appear. */
+	show_when_healthy: boolean,
 	detail: string,
 };
 
@@ -429,6 +437,7 @@ export type EditorSnapshot_Deserialize = {
 	session_id: string,
 	revision: number,
 	draft: WorkflowDefinition_Deserialize,
+	trigger_schemas: { [key in string]: ConfigSchema },
 	dirty: boolean,
 	can_undo: boolean,
 	can_redo: boolean,
@@ -439,6 +448,7 @@ export type EditorSnapshot_Serialize = {
 	session_id: string,
 	revision: number,
 	draft: WorkflowDefinition_Serialize,
+	trigger_schemas: { [key in string]: ConfigSchema },
 	dirty: boolean,
 	can_undo: boolean,
 	can_redo: boolean,
@@ -539,6 +549,26 @@ export type EventSummary = {
 export type EventTargetPage = {
 	targets: EventReplayTarget[],
 	errors: string[],
+};
+
+/**  One named recipient with the sender channels it is permitted to receive. */
+export type EventTestConsumer = {
+	id: string,
+	name: string,
+	channels: string[],
+};
+
+/**  Available registered test senders and current named overlay consumers. */
+export type EventTestOptions = {
+	senders: EventTestSender[],
+	consumers: EventTestConsumer[],
+};
+
+/**  An integration-owned test sender using its ordinary compiled action inputs. */
+export type EventTestSender = {
+	definition: ActionDefinition,
+	target_field: string,
+	channel: string,
 };
 
 export type Failure = {
@@ -745,6 +775,14 @@ export type ScriptActivity = {
 };
 
 export type ScriptOutcome = "succeeded" | "failed" | "cancelled";
+
+/**  Literal test inputs and one explicit recipient; the native layer owns recipient injection. */
+export type SendTestEvent = {
+	action_id: string,
+	version: number,
+	consumer_id: string,
+	values: { [key in string]: unknown },
+};
 
 export type StartTwitchLogin = {
 	role: TwitchRole,

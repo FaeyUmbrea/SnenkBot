@@ -50,3 +50,21 @@
 :is(.workflow-editor, .desktop-shell) select {
 	accent-color: var(--blood);
 }
+
+/* Column labels sit above the rows rather than looking like another entry. */
+:is(.workflow-editor, .desktop-shell) .list-heading {
+	border-bottom: 1px solid var(--border);
+	color: var(--muted);
+	font-size: 12px;
+	font-weight: 600;
+	background: transparent;
+}
+
+/* Generated field buttons share the editor palette without changing canvas controls. */
+:where(.workflow-editor, .desktop-shell) .field-button {
+	min-height: 32px;
+	padding: 6px 12px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: var(--surface);
+}

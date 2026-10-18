@@ -8,7 +8,8 @@ pub(crate) mod events;
 pub mod settings;
 
 pub use events::{
-    ObsActivation, ObsRoute, ObsRouteKind, routes_for, trigger_title, trigger_value_schema,
+    ObsActivation, ObsRoute, ObsRouteKind, routes_for, trigger_configuration, trigger_title,
+    trigger_value_schema,
 };
 use events::{activations, subscriptions};
 
@@ -292,7 +293,7 @@ impl ObsIntegration {
                     result => {
                         let error = match result {
                             Ok(Err(error)) => error,
-                            Err(_) => EventStreamError::Disconnected,
+                            Err(_) => EventStreamError::Unavailable,
                             Ok(Ok(_)) => unreachable!(),
                         };
                         if error.requires_configuration() {
@@ -474,7 +475,15 @@ impl ConfigurationStatus for ObsIntegration {
         {
             return Vec::new();
         }
-        let (state, detail) = match self.health() {
+        let health = self.health();
+        let state_label = match &health {
+            ObsHealth::Disabled => "Disabled",
+            ObsHealth::Disconnected | ObsHealth::Connecting => "Connecting",
+            ObsHealth::Connected => "Connected",
+            ObsHealth::Retrying(_) => "Unavailable",
+            ObsHealth::Error(_) => "Error",
+        };
+        let (state, detail) = match health {
             ObsHealth::Disabled => (ConnectionState::Inactive, "Disabled".into()),
             ObsHealth::Disconnected => (
                 ConnectionState::Connecting,
@@ -490,6 +499,8 @@ impl ConfigurationStatus for ObsIntegration {
             connection: "connection".into(),
             title: "OBS Studio".into(),
             state,
+            show_when_healthy: true,
+            state_label: state_label.into(),
             detail,
         }]
     }

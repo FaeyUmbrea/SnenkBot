@@ -160,11 +160,7 @@ impl ApiService {
         };
         Arc::new(Self {
             store,
-            events: EventHub::new(
-                paths,
-                settings.enabled && settings.record_support,
-                settings.support_retention as usize,
-            ),
+            events: EventHub::new(paths, settings.support_retention as usize),
             providers,
             connection_slots: Arc::new(Semaphore::new(64)),
             storage_slots: Arc::new(Semaphore::new(16)),
@@ -201,10 +197,7 @@ impl ApiService {
             .lock()
             .expect("API configuration lock poisoned");
         let outcome = self.store.save_configuration(&expected, settings.clone())?;
-        self.events.configure(
-            settings.enabled && settings.record_support,
-            settings.support_retention as usize,
-        );
+        self.events.configure(settings.support_retention as usize);
         self.status
             .set(if settings.enabled {
                 api_status(ConnectionState::Connecting, "Restarting listener")
@@ -536,7 +529,24 @@ fn router(service: Arc<ApiService>) -> Router {
         .with_state(service)
 }
 
-/// Responds to a browser preflight for an explicitly allowed origin.
+/// Recognizes local browser sources and pages served by this HTTP listener.
+fn automatic_origin(headers: &HeaderMap) -> bool {
+    let Some(origin) = headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+    if matches!(origin, "null" | "http://absolute") {
+        return true;
+    }
+    headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|host| origin == format!("http://{host}"))
+}
+
+/// Responds to preflight for local sources, this server, or an explicitly registered site.
 async fn preflight(State(service): State<Arc<ApiService>>, headers: HeaderMap) -> Response {
     let Some(origin) = headers.get(header::ORIGIN) else {
         return StatusCode::FORBIDDEN.into_response();
@@ -544,7 +554,7 @@ async fn preflight(State(service): State<Arc<ApiService>>, headers: HeaderMap) -
     let Ok(source) = origin.to_str() else {
         return StatusCode::FORBIDDEN.into_response();
     };
-    if !service.store.origin_allowed(source).unwrap_or(false) {
+    if !automatic_origin(&headers) && !service.store.origin_allowed(source).unwrap_or(false) {
         return StatusCode::FORBIDDEN.into_response();
     }
     let mut response = StatusCode::NO_CONTENT.into_response();
@@ -565,7 +575,7 @@ async fn preflight(State(service): State<Arc<ApiService>>, headers: HeaderMap) -
     response
 }
 
-/// Resolves a bearer credential and enforces that consumer's exact browser origin.
+/// Resolves a bearer credential and checks additional external sites against its origin grants.
 fn authorize(
     service: &ApiService,
     headers: &HeaderMap,
@@ -583,7 +593,7 @@ fn authorize(
     let origin = match headers.get(header::ORIGIN) {
         Some(value) => {
             let source = value.to_str().map_err(|_| StatusCode::FORBIDDEN)?;
-            if !consumer.allowed_origins.contains(source) {
+            if !automatic_origin(headers) && !consumer.allowed_origins.contains(source) {
                 return Err(StatusCode::FORBIDDEN);
             }
             Some(value.clone())
@@ -617,7 +627,7 @@ fn auth_error(service: &ApiService, headers: &HeaderMap, code: StatusCode) -> Re
                     .store
                     .origin_allowed(origin)
                     .ok()
-                    .filter(|allowed| *allowed)
+                    .filter(|allowed| *allowed || automatic_origin(headers))
             })
             .map(|_| value.clone())
     });
@@ -712,8 +722,10 @@ async fn events(
         pending: VecDeque::new(),
         consumer_changes: service.store.subscribe_consumer_changes(),
         settings_changes: service.store.subscribe(),
+        // Built-in origins do not depend on mutable external-site grants.
         origin: origin
             .as_ref()
+            .filter(|_| !automatic_origin(&headers))
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned),
         token,
@@ -962,8 +974,16 @@ fn api_status(state: ConnectionState, detail: &str) -> ConnectionStatus {
     ConnectionStatus {
         integration: "api".into(),
         connection: "listener".into(),
-        title: "Overlay API".into(),
+        title: "API server".into(),
         state,
+        show_when_healthy: true,
+        state_label: match state {
+            ConnectionState::Inactive => "Stopped",
+            ConnectionState::Connecting => "Starting",
+            ConnectionState::Connected => "Running",
+            ConnectionState::Error => "Error",
+        }
+        .into(),
         detail: detail.into(),
     }
 }
@@ -1187,6 +1207,64 @@ mod tests {
         );
     }
 
+    /// Listener status owns server wording and omits stopped listeners from visible rows.
+    #[test]
+    fn listener_status_uses_server_labels_and_owns_visibility() {
+        let temporary = tempfile::tempdir().unwrap();
+        let service = service(temporary.path());
+        for (state, label) in [
+            (ConnectionState::Connecting, "Starting"),
+            (ConnectionState::Connected, "Running"),
+            (ConnectionState::Error, "Error"),
+        ] {
+            service
+                .status
+                .set(api_status(state, "Listener health"))
+                .unwrap();
+            let statuses = service.connection_statuses();
+            assert_eq!(statuses.len(), 1);
+            assert_eq!(statuses[0].state, state);
+            assert_eq!(statuses[0].state_label, label);
+        }
+        let stopped = api_status(ConnectionState::Inactive, "Disabled");
+        assert_eq!(stopped.state_label, "Stopped");
+        service.status.set(stopped).unwrap();
+        assert!(service.connection_statuses().is_empty());
+    }
+
+    /// Incoming support persists with the HTTP listener disabled and no API consumers.
+    #[tokio::test]
+    async fn disabled_listener_still_records_support_without_consumers() {
+        let temporary = tempfile::tempdir().unwrap();
+        let service = service(temporary.path());
+        assert!(!service.configuration().unwrap().enabled);
+        let hub = service.event_hub();
+        hub.set_broadcaster("100").unwrap();
+        let shutdown = CancellationToken::new();
+        let writer = tokio::spawn({
+            let hub = Arc::clone(&hub);
+            let shutdown = shutdown.clone();
+            async move { hub.run_history(shutdown).await }
+        });
+        hub.publish_twitch(
+            &crate::twitch::events::TwitchEvent::Cheer(serde_json::json!({
+                "broadcaster_user_id":"100", "user_name":"Viewer", "bits":100
+            })),
+            &serde_json::json!({"metadata":{
+                "message_id":"one", "message_timestamp":"2026-10-18T08:00:00Z"
+            }}),
+        )
+        .unwrap();
+        shutdown.cancel();
+        writer.await.unwrap().unwrap();
+        let restarted = self::service(temporary.path());
+        let hub = restarted.event_hub();
+        hub.set_broadcaster("100").unwrap();
+        let subscription =
+            hub.subscribe(BTreeSet::from(["twitch.support".into()]), BTreeMap::new());
+        assert_eq!(subscription.initial[0].data.as_array().unwrap().len(), 1);
+    }
+
     /// A saved disabled listener remains configured without producing a status row.
     #[test]
     fn disabled_listener_is_configured_but_not_in_connections() {
@@ -1194,11 +1272,25 @@ mod tests {
         let service = service(temporary.path());
         assert!(!service.is_configured().unwrap());
         assert!(service.connection_statuses().is_empty());
+        assert!(
+            service
+                .event_hub()
+                .subscribe_demand()
+                .borrow()
+                .contains("twitch.support")
+        );
         service
             .save_configuration(ApiSettings::default(), ApiSettings::default())
             .unwrap();
         assert!(service.is_configured().unwrap());
         assert!(service.connection_statuses().is_empty());
+        assert!(
+            service
+                .event_hub()
+                .subscribe_demand()
+                .borrow()
+                .contains("twitch.support")
+        );
     }
 
     /// Checks protected static files, protocol semantics, live reload, and immediate revocation.
@@ -1377,6 +1469,165 @@ mod tests {
         }
     }
 
+    /// Local and same-server pages work without origin entries, but still require authentication.
+    #[tokio::test]
+    async fn automatic_browser_origins_require_tokens_without_manual_origin_grants() {
+        let temporary = tempfile::tempdir().unwrap();
+        let service = service(temporary.path());
+        let credential = service
+            .create_consumer(
+                "overlay".into(),
+                ConsumerPermissions::default(),
+                BTreeSet::new(),
+                None,
+            )
+            .unwrap();
+        let app = router(Arc::clone(&service));
+        for origin in ["null", "http://absolute", "http://192.168.1.20:38764"] {
+            let request = |method: &str, token: bool| {
+                let mut builder = Request::builder()
+                    .method(method)
+                    .uri("/api/v1/settings/animations")
+                    .header(header::HOST, "192.168.1.20:38764")
+                    .header(header::ORIGIN, origin);
+                if token {
+                    builder = builder.header(
+                        header::AUTHORIZATION,
+                        format!("Bearer {}", credential.token),
+                    );
+                }
+                builder.body(Body::empty()).unwrap()
+            };
+            let preflight = app
+                .clone()
+                .oneshot(request("OPTIONS", false))
+                .await
+                .unwrap();
+            assert_eq!(preflight.status(), StatusCode::NO_CONTENT);
+            assert_eq!(
+                preflight.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],
+                origin
+            );
+            let denied = app.clone().oneshot(request("GET", false)).await.unwrap();
+            assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(
+                denied.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],
+                origin
+            );
+            let allowed = app.clone().oneshot(request("GET", true)).await.unwrap();
+            assert_eq!(allowed.status(), StatusCode::OK);
+            assert_eq!(
+                allowed.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],
+                origin
+            );
+        }
+        for origin in [
+            "http://elsewhere.example",
+            "https://192.168.1.20:38764",
+            "http://192.168.1.20:38765",
+        ] {
+            for method in ["GET", "OPTIONS"] {
+                let denied = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method(method)
+                            .uri("/api/v1/settings/animations")
+                            .header(header::HOST, "192.168.1.20:38764")
+                            .header(header::ORIGIN, origin)
+                            .header(
+                                header::AUTHORIZATION,
+                                format!("Bearer {}", credential.token),
+                            )
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+                assert!(
+                    !denied
+                        .headers()
+                        .contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                );
+            }
+        }
+    }
+
+    /// Administrative edits do not disconnect local streams whose origin needs no saved grant.
+    #[tokio::test]
+    async fn automatic_origins_survive_consumer_edits_and_still_observe_revocation() {
+        let temporary = tempfile::tempdir().unwrap();
+        let service = service(temporary.path());
+        let mut settings = service.configuration().unwrap();
+        settings.enabled = true;
+        service
+            .save_configuration(ApiSettings::default(), settings)
+            .unwrap();
+        let permissions = ConsumerPermissions {
+            channels: BTreeSet::from(["twitch.support".into()]),
+            ..ConsumerPermissions::default()
+        };
+        let hub = service.event_hub();
+        hub.set_broadcaster("100").unwrap();
+        for origin in ["null", "http://absolute", "http://192.168.1.20:38764"] {
+            let credential = service
+                .create_consumer("overlay".into(), permissions.clone(), BTreeSet::new(), None)
+                .unwrap();
+            let response = router(Arc::clone(&service))
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/v1/events?channels=twitch.support")
+                        .header(header::HOST, "192.168.1.20:38764")
+                        .header(header::ORIGIN, origin)
+                        .header(
+                            header::AUTHORIZATION,
+                            format!("Bearer {}", credential.token),
+                        )
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let mut body = response.into_body().into_data_stream();
+            body.next().await.unwrap().unwrap();
+            service
+                .update_consumer(
+                    &credential.id,
+                    "renamed".into(),
+                    permissions.clone(),
+                    BTreeSet::new(),
+                    None,
+                )
+                .unwrap();
+            hub.replay_twitch_consumer(
+                &crate::twitch::events::TwitchEvent::Cheer(serde_json::json!({"broadcaster_user_id":"100", "user_name":"Viewer", "bits":100})),
+                &serde_json::json!({
+                    "metadata": {"message_id": "original", "message_timestamp": "2026-10-18T08:00:00Z"},
+                    "payload": {"event": {"broadcaster_user_id": "100"}}
+                }), "twitch.support", &credential.id,
+            ).unwrap();
+            let frame = tokio::time::timeout(Duration::from_secs(1), body.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert!(
+                std::str::from_utf8(&frame)
+                    .unwrap()
+                    .contains("twitch.support")
+            );
+            service.revoke_consumer(&credential.id).unwrap();
+            assert!(
+                tokio::time::timeout(Duration::from_secs(1), body.next())
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+
     /// Verifies browser origin, bearer grant, secret denial, and live revocation.
     #[tokio::test]
     async fn http_authorization_origin_and_sse_grants_are_enforced() {
@@ -1394,7 +1645,7 @@ mod tests {
                     channels: BTreeSet::from(["twitch.chat".into()]),
                     ..ConsumerPermissions::default()
                 },
-                BTreeSet::from(["http://localhost:5173".into(), "null".into()]),
+                BTreeSet::from(["http://localhost:5173".into()]),
                 None,
             )
             .unwrap();
@@ -1406,7 +1657,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
-        assert!(service.subscribe_demand().borrow().is_empty());
+        assert_eq!(
+            *service.subscribe_demand().borrow(),
+            BTreeSet::from(["twitch.support".into()])
+        );
         let denied_origin = app
             .clone()
             .oneshot(

@@ -84,7 +84,7 @@ impl ProviderSecrets for CredentialCache {
 pub struct ProviderIntegration {
     settings_store: ProviderSettingsStore,
     settings_lock: Mutex<()>,
-    settings_faults: RwLock<[Option<String>; 3]>,
+    settings_faults: RwLock<[Option<String>; 4]>,
     key_lock: Mutex<()>,
     credentials: Arc<CredentialCache>,
     services: Arc<ProviderServices>,
@@ -296,6 +296,8 @@ impl ConfigurationStatus for ProviderIntegration {
                 connection: "settings".into(),
                 title: provider_title(provider).into(),
                 state: ConnectionState::Error,
+                show_when_healthy: false,
+                state_label: "Unavailable".into(),
                 detail: "Provider settings are invalid".into(),
             })
             .collect();
@@ -303,7 +305,8 @@ impl ConfigurationStatus for ProviderIntegration {
         statuses.extend(
             [
                 ("steamgriddb", "SteamGridDB", settings.steamgriddb_enabled),
-                ("emotes", "FFZ and BTTV emotes", settings.emotes_enabled),
+                ("ffz", "FrankerFaceZ", settings.ffz_enabled),
+                ("bttv", "BetterTTV", settings.bttv_enabled),
                 ("pronouns", "Pronouns", settings.pronouns_enabled),
             ]
             .into_iter()
@@ -319,6 +322,13 @@ impl ConfigurationStatus for ProviderIntegration {
                     connection: "lookup".into(),
                     title: title.into(),
                     state,
+                    show_when_healthy: false,
+                    state_label: if state == ConnectionState::Connected {
+                        "Ready"
+                    } else {
+                        "Unavailable"
+                    }
+                    .into(),
                     detail,
                 }
             }),
@@ -333,9 +343,9 @@ impl ConfigurationStatus for ProviderIntegration {
 }
 
 /// Loads each provider independently so one invalid document cannot disable siblings.
-fn read_available(store: &ProviderSettingsStore) -> (ProviderSettings, [Option<String>; 3]) {
+fn read_available(store: &ProviderSettingsStore) -> (ProviderSettings, [Option<String>; 4]) {
     let mut settings = ProviderSettings::default();
-    let mut faults: [Option<String>; 3] = std::array::from_fn(|_| None);
+    let mut faults: [Option<String>; 4] = std::array::from_fn(|_| None);
     for provider in ProviderId::ALL {
         match store.load_provider(provider) {
             Ok(loaded) => provider.set_enabled(&mut settings, loaded.enabled),
@@ -349,7 +359,8 @@ fn read_available(store: &ProviderSettingsStore) -> (ProviderSettings, [Option<S
 fn provider_title(provider: ProviderId) -> &'static str {
     match provider {
         ProviderId::SteamGridDb => "SteamGridDB",
-        ProviderId::Emotes => "FFZ and BTTV emotes",
+        ProviderId::Ffz => "FrankerFaceZ",
+        ProviderId::Bttv => "BetterTTV",
         ProviderId::Pronouns => "Pronouns",
     }
 }
@@ -443,25 +454,34 @@ mod tests {
         let integration = ProviderIntegration::register(&paths, &mut engine).unwrap();
         assert!(integration.connection_statuses().is_empty());
         integration
-            .save_enabled(ProviderId::Emotes, false, true)
+            .save_enabled(ProviderId::Ffz, false, true)
             .unwrap();
         integration
             .save_enabled(ProviderId::Pronouns, false, true)
             .unwrap();
         let settings = integration.settings().unwrap();
-        assert!(settings.emotes_enabled);
+        assert!(settings.ffz_enabled);
         assert!(settings.pronouns_enabled);
         assert!(!settings.steamgriddb_enabled);
-        assert_eq!(integration.connection_statuses().len(), 2);
+        let statuses = integration.connection_statuses();
+        assert_eq!(statuses.len(), 2);
+        assert!(statuses.iter().all(|status| {
+            status.state == ConnectionState::Connected
+                && status.state_label == "Ready"
+                && !status.show_when_healthy
+        }));
         assert!(matches!(
-            integration.save_enabled(ProviderId::Emotes, false, false),
+            integration.save_enabled(ProviderId::Ffz, false, false),
             Err(super::ProviderIntegrationError::Conflict)
         ));
         integration
-            .save_enabled(ProviderId::Emotes, true, false)
+            .save_enabled(ProviderId::Ffz, true, false)
             .unwrap();
-        assert!(integration.configured(ProviderId::Emotes).unwrap());
-        assert_eq!(integration.connection_statuses().len(), 1);
+        assert!(integration.configured(ProviderId::Ffz).unwrap());
+        let statuses = integration.connection_statuses();
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].integration, "pronouns");
+        assert_eq!(statuses[0].state_label, "Ready");
         assert!(integration.settings().unwrap().pronouns_enabled);
     }
 
@@ -482,7 +502,7 @@ mod tests {
 
         let integration = ProviderIntegration::register(&paths, &mut engine).unwrap();
 
-        assert_eq!(engine.action_schemas().len(), 5);
+        assert_eq!(engine.action_schemas().len(), 7);
         assert_eq!(
             integration.connection_statuses()[0].state,
             ConnectionState::Error
@@ -504,7 +524,7 @@ mod tests {
             state: directory.path().join("state"),
         };
         let store = ProviderSettingsStore::new(&paths);
-        for provider in [ProviderId::Emotes, ProviderId::Pronouns] {
+        for provider in [ProviderId::Ffz, ProviderId::Pronouns] {
             let loaded = store.load_provider(provider).unwrap();
             store.save_provider(&loaded, provider, true).unwrap();
         }
@@ -513,17 +533,17 @@ mod tests {
         let mut engine = Engine::new(Arc::new(NoInput), Arc::new(|_| {}));
         let integration = ProviderIntegration::register(&paths, &mut engine).unwrap();
 
-        assert_eq!(engine.action_schemas().len(), 5);
-        assert!(integration.services.ready("emotes").is_ok());
+        assert_eq!(engine.action_schemas().len(), 7);
+        assert!(integration.services.ready("ffz").is_ok());
         assert!(integration.services.ready("pronouns").is_ok());
-        assert!(integration.enabled(ProviderId::Emotes).unwrap());
-        assert!(integration.configured(ProviderId::Emotes).unwrap());
+        assert!(integration.enabled(ProviderId::Ffz).unwrap());
+        assert!(integration.configured(ProviderId::Ffz).unwrap());
         assert!(integration.enabled(ProviderId::SteamGridDb).is_err());
         assert_eq!(integration.connection_statuses().len(), 3);
         integration
-            .save_enabled(ProviderId::Emotes, true, false)
+            .save_enabled(ProviderId::Ffz, true, false)
             .unwrap();
-        assert!(!integration.enabled(ProviderId::Emotes).unwrap());
+        assert!(!integration.enabled(ProviderId::Ffz).unwrap());
         assert!(integration.enabled(ProviderId::Pronouns).unwrap());
         assert_eq!(
             std::fs::read_to_string(steam_file).unwrap(),
@@ -549,10 +569,10 @@ mod tests {
             .unwrap();
         assert!(!integration.services.settings().pronouns_enabled);
         integration
-            .save_enabled(ProviderId::Emotes, false, true)
+            .save_enabled(ProviderId::Ffz, false, true)
             .unwrap();
         let runtime = integration.services.settings();
-        assert!(runtime.emotes_enabled);
+        assert!(runtime.ffz_enabled);
         assert!(runtime.pronouns_enabled);
     }
 }

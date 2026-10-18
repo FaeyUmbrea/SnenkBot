@@ -9,6 +9,7 @@
 	import { runResult } from './history-format';
 	import { type DesktopPage } from './navigation';
 	import Icon from './Icon.svelte';
+	import { prioritizeConnections } from './connection-order';
 	import './theme.css';
 
 	let {
@@ -42,12 +43,6 @@
 	let runErrors = $state<Record<string, { revision: number | null; message: string }>>({});
 	const visibleWorkflows = $derived(workflows.slice(0, 6));
 	const recentRuns = $derived((history?.entries ?? []).slice(0, 6));
-	const stateLabels = {
-		connected: 'Connected',
-		connecting: 'Connecting',
-		inactive: 'Inactive',
-		error: 'Connection error'
-	};
 	const categoryIcons = { Chat: 'message', Broadcast: 'monitor', Automation: 'zap' } as const;
 	const dateTime = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
@@ -117,13 +112,14 @@
 		<section aria-labelledby="home-connections-heading">
 			<h2 id="home-connections-heading">Connections</h2>
 			<ul class="connection-list">
-				{#each connections as connection (`${connection.integration}:${connection.connection}`)}
+				{#each prioritizeConnections(connections) as connection (`${connection.integration}:${connection.connection}`)}
 					<li>
 						<div class="connection-name">
 							<span class="pip {connection.state}"></span><strong>{connection.title}</strong>
 						</div>
 						<div class="connection-detail">
-							<span>{stateLabels[connection.state]}</span>{#if connection.detail}<span
+							<span>{connection.state_label}</span
+							>{#if connection.state !== 'connected' && connection.detail}<span
 									>{connection.detail}</span
 								>{/if}
 						</div>

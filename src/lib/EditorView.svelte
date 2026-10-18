@@ -16,6 +16,7 @@
 	import WorkflowCanvas from './WorkflowCanvas.svelte';
 	import ActionCatalog from './ActionCatalog.svelte';
 	import InputControl from './InputControl.svelte';
+	import ConfigurationFields from './ConfigurationFields.svelte';
 	let { controller }: { controller: ReturnType<typeof createApplicationController> } = $props();
 	const application = untrack(() => controller);
 	const resources = untrack(() => controller.resources);
@@ -121,7 +122,7 @@
 		$application.definitions.map((d) => ({
 			id: d.schema.id,
 			title: d.schema.title,
-			category: d.schema.title.includes('OBS') ? 'Broadcast' : 'Actions',
+			category: 'Actions',
 			kind: {
 				Action: {
 					capability: d.schema.id,
@@ -177,17 +178,30 @@
 		});
 		picker = null;
 	}
-	function triggerTitle(kind: (typeof editor.draft.triggers)[number]['kind']) {
-		if (kind.kind === 'manual') return 'Manual run';
-		if (kind.kind === 'obs.recording_started') return 'Recording starts';
-		if (kind.kind === 'obs.current_scene') return 'OBS scene changes';
-		const labels: Record<string, string> = {
-			'chat.command': 'Twitch chat command',
-			'channel.details_changed': 'Stream title or game changes',
-			'ad_break.begin': 'Twitch ad break starts',
-			'recording.started': 'Recording starts'
-		};
-		return labels[kind.event] ?? 'Integration event';
+	/** Render titles from the trigger owner's native schema, including unknown saved triggers. */
+	function triggerTitle(trigger: (typeof editor.draft.triggers)[number]) {
+		return editor.trigger_schemas[trigger.id]?.title ?? 'Unavailable trigger';
+	}
+	/** Apply typed generated filter edits and omit cleared optional selectors. */
+	function changeFilters(
+		trigger: (typeof editor.draft.triggers)[number],
+		values: Record<string, unknown>
+	) {
+		if (trigger.kind.kind !== 'integration_event') return;
+		const fields = editor.trigger_schemas[trigger.id]?.fields ?? [];
+		const filters = Object.fromEntries(
+			Object.entries(values).filter(([id, value]) => {
+				const field = fields.find((item) => item.id === id);
+				return !field || field.required || (value !== '' && value !== null);
+			})
+		);
+		quiet(
+			edit({
+				operation: 'trigger_kind',
+				trigger_id: trigger.id,
+				kind: { ...trigger.kind, filters }
+			})
+		);
 	}
 </script>
 
@@ -219,7 +233,7 @@
 		<section class="triggers" aria-label="Triggers">
 			<h2>Triggers</h2>
 			{#each editor.draft.triggers as trigger (trigger.id)}<div class="trigger">
-					<strong>{triggerTitle(trigger.kind)}</strong><label
+					<strong>{triggerTitle(trigger)}</strong><label
 						><input
 							type="checkbox"
 							checked={trigger.enabled}
@@ -232,36 +246,17 @@
 									})
 								)}
 						/>Enabled</label
-					>{#if trigger.kind.kind === 'integration_event'}{#each Object.entries(trigger.kind.filters ?? {}) as [key, value] (key)}<label
-								>{key === 'command'
-									? 'Command'
-									: key === 'aliases'
-										? 'Aliases'
-										: key === 'permission'
-											? 'Who can use this'
-											: key.replaceAll('_', ' ')}<input
-									value={typeof value === 'string' ? value : JSON.stringify(value)}
-									onchange={(e) => {
-										if (trigger.kind.kind !== 'integration_event') return;
-										let next: unknown = e.currentTarget.value;
-										if (typeof value !== 'string') {
-											try {
-												next = JSON.parse(e.currentTarget.value);
-											} catch {
-												return;
-											}
-										}
-										quiet(
-											edit({
-												operation: 'trigger_kind',
-												trigger_id: trigger.id,
-												kind: { ...trigger.kind, filters: { ...trigger.kind.filters, [key]: next } }
-											})
-										);
-									}}
-								/></label
-							>{/each}{/if}<button
-						aria-label={`Remove ${triggerTitle(trigger.kind)}`}
+					>{#if trigger.kind.kind === 'integration_event' && editor.trigger_schemas[trigger.id]}
+						<div class="trigger-fields">
+							<ConfigurationFields
+								fields={editor.trigger_schemas[trigger.id].fields}
+								updateOnInput={false}
+								values={trigger.kind.filters ?? {}}
+								onChange={(values) => changeFilters(trigger, values)}
+							/>
+						</div>
+					{/if}<button
+						aria-label={`Remove ${triggerTitle(trigger)}`}
 						onclick={() => quiet(edit({ operation: 'remove_trigger', trigger_id: trigger.id }))}
 						>Remove</button
 					>
@@ -439,6 +434,10 @@
 </div>
 
 <style>
+	.trigger-fields {
+		flex-basis: 100%;
+		min-width: 0;
+	}
 	.editor-layout {
 		display: grid;
 		grid-template-columns: minmax(0, 1fr) 384px;

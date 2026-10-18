@@ -8,6 +8,7 @@ pub mod commands;
 pub mod configuration;
 pub mod directories;
 pub mod editor;
+pub mod event_testing;
 pub mod events;
 pub mod history;
 pub mod host;

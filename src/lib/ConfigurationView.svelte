@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
+	import { untrack, type Snippet } from 'svelte';
 	import { DesktopRequestError } from './desktop';
 	import ConfigurationFields from './ConfigurationFields.svelte';
 	import CredentialField from './CredentialField.svelte';
@@ -25,7 +25,9 @@
 		onForgetAuthorization,
 		onBack,
 		pickDirectory,
-		backLabel = 'Back'
+		backLabel = 'Back',
+		showTitle = true,
+		actions
 	}: {
 		snapshot: ConfigurationSnapshot;
 		credentialPresence?: CredentialPresence;
@@ -39,6 +41,8 @@
 		onBack?: () => void;
 		pickDirectory?: (field_path: string[], current_path: string | null) => Promise<string | null>;
 		backLabel?: string;
+		showTitle?: boolean;
+		actions?: Snippet;
 	} = $props();
 
 	let draft = $state<Record<string, unknown>>(untrack(() => valuesFromSnapshot(snapshot)));
@@ -169,11 +173,11 @@
 	aria-label={`${snapshot.schema.title} settings`}
 	aria-busy={isSaving || isSavingCredential}
 >
-	<header class="configuration-header">
-		<div>
-			<h1>{snapshot.schema.title}</h1>
-		</div>
-	</header>
+	{#if showTitle}<header class="configuration-header">
+			<div>
+				<h1>{snapshot.schema.title}</h1>
+			</div>
+		</header>{/if}
 	<form
 		onsubmit={(event) => {
 			event.preventDefault();
@@ -217,7 +221,18 @@
 			</div>{/if}
 		{#if message}<p role="status">{message}</p>{/if}
 		{#each notices as notice, index (index)}<p role="status">{notice}</p>{/each}
+		{#if snapshot.authorization && onAuthorizationPresence && onAuthorize && onForgetAuthorization}
+			<AuthorizationField
+				descriptor={snapshot.authorization}
+				ready={snapshot.authorization_ready}
+				contextKey={snapshot.session_id}
+				onPresence={onAuthorizationPresence}
+				{onAuthorize}
+				onForget={onForgetAuthorization}
+			/>
+		{/if}
 		<footer class="configuration-actions">
+			{@render actions?.()}
 			{#if onBack}<button
 					type="button"
 					class="secondary"
@@ -229,16 +244,6 @@
 			>
 		</footer>
 	</form>
-	{#if snapshot.authorization && onAuthorizationPresence && onAuthorize && onForgetAuthorization}
-		<AuthorizationField
-			descriptor={snapshot.authorization}
-			ready={snapshot.authorization_ready}
-			contextKey={snapshot.session_id}
-			onPresence={onAuthorizationPresence}
-			{onAuthorize}
-			onForget={onForgetAuthorization}
-		/>
-	{/if}
 </section>
 
 <style>
@@ -274,9 +279,11 @@
 	.configuration-fields {
 		display: flex;
 		flex-direction: column;
-		gap: 0;
-		padding: 0 16px;
+		gap: 16px;
+		padding: 20px;
 		background: var(--side);
+		border: 1px solid var(--border);
+		border-radius: 8px;
 	}
 	button {
 		min-height: 32px;

@@ -7,6 +7,8 @@
 	import HomeView from './lib/HomeView.svelte';
 	import WorkflowLibraryView from './lib/WorkflowLibraryView.svelte';
 	import EventsView from './lib/EventsView.svelte';
+	import EventTestDialog from './lib/EventTestDialog.svelte';
+	let testingEvents = $state(false);
 	import HistoryView from './lib/HistoryView.svelte';
 	import SettingsView from './lib/SettingsView.svelte';
 	import { importSupportHistory } from './lib/event-import';
@@ -204,6 +206,7 @@
 			</div>{/if}
 		<div class="page-view settings-page" hidden={$application.page !== 'accounts'}>
 			{#if $application.accounts}<AccountConnectionsView
+					showTitle={false}
 					accounts={$application.accounts}
 					selectedRole={selectedAccountRole}
 					authentication={$application.authentication}
@@ -215,10 +218,6 @@
 					onCancel={(attempt_id) => controller.cancelTwitchLogin({ attempt_id })}
 					onOpen={(attempt_id) => controller.openTwitchLogin({ attempt_id })}
 					onCopy={(attempt_id, target) => controller.copyTwitchLogin({ attempt_id, target })}
-					onBack={() =>
-						accountEntry ? navigate(accountEntry.category) : controller.returnToContext()}
-					backLabel={desktopNavigation.find((page) => page.id === accountEntry?.category)?.title ??
-						'Back'}
 				/>{:else}<div class="loading">
 					<p>{$application.accountError ?? 'Loading accounts…'}</p>
 					<button onclick={() => quiet(controller.refreshAccounts())}>Retry accounts</button>
@@ -227,16 +226,20 @@
 
 		{#if $application.page === 'events'}<div class="page-view settings-page">
 				<EventsView
+					showTitle={false}
 					load={client.eventsList}
 					targets={client.eventsTargets}
 					replay={client.eventsReplay}
-				/>
-				<ConfigurationImport
-					label="Import support events"
-					description="Import an existing events.json history file."
-					maxBytes={2 * 1024 * 1024}
-					onImport={(value) => importSupportHistory(client, value)}
-				/>
+				>
+					{#snippet actions()}
+						<ConfigurationImport
+							label="Import history…"
+							description="Import an existing events.json support history file."
+							maxBytes={2 * 1024 * 1024}
+							onImport={(value) => importSupportHistory(client, value)}
+						/>
+					{/snippet}
+				</EventsView>
 			</div>{/if}
 
 		{#if ['general', 'broadcast', 'streaming', 'devices'].includes($application.page) && !$application.configurationModule}
@@ -265,16 +268,14 @@
 				>
 					{#key config.session_id}
 						<SettingsView
+							showTitle={false}
 							snapshot={config}
 							{client}
 							onSave={saveConfiguration}
+							onAction={(action) => {
+								if (action.id === 'api.test_events') testingEvents = true;
+							}}
 							active={$application.configurationModule === config.module}
-							onBack={entry?.category === 'general'
-								? undefined
-								: () => (entry ? navigate(entry.category) : controller.returnToContext())}
-							backLabel={entry
-								? (desktopNavigation.find((page) => page.id === entry.category)?.title ?? 'Back')
-								: 'Back'}
 						/>
 					{/key}
 				</IntegrationOverview>
@@ -282,6 +283,13 @@
 		{/each}
 	{/if}
 </DesktopShell>
+{#if testingEvents}<EventTestDialog
+		open={testingEvents}
+		load={client.eventTestOptions}
+		choices={client.actionChoices}
+		send={client.eventTestSend}
+		onClose={() => (testingEvents = false)}
+	/>{/if}
 <WorkflowInputDialog
 	request={$application.snapshot?.pending_input ?? null}
 	onSubmit={controller.submitInput}

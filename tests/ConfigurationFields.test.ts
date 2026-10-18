@@ -76,7 +76,7 @@ describe('shared string collection editor', () => {
 });
 
 describe('nested configuration choices', () => {
-	it('collapses empty choice groups and retains unavailable saved values', async () => {
+	it('collapses saved and empty choice groups and retains unavailable saved values', async () => {
 		const field: ConfigField = {
 			id: 'permissions',
 			label: 'Permissions',
@@ -124,6 +124,8 @@ describe('nested configuration choices', () => {
 		});
 		const lookup = view.getByText('Lookup').closest('details');
 		const other = view.getByText('Other').closest('details');
+		expect(lookup?.open).toBe(false);
+		await fireEvent.click(view.getByText('Lookup'));
 		expect(lookup?.open).toBe(true);
 		expect(other?.open).toBe(false);
 		expect(lookup?.textContent).toContain('1 selected');
@@ -206,4 +208,97 @@ describe('shared directory control', () => {
 		await fireEvent.input(view.getByLabelText('Folder'), { target: { value: '' } });
 		expect(onChange).toHaveBeenCalledExactlyOnceWith({ storage: { folder: null } });
 	});
+});
+
+it('keeps populated origins and event permissions closed and searches a large lookup catalogue without dropping grants', async () => {
+	const base: ConfigField = {
+		id: 'origins',
+		label: 'Browser origins',
+		description: '',
+		introduced_in: 1,
+		kind: 'string_set',
+		required: false,
+		choice_source: null
+	};
+	const onChange = vi.fn();
+	const view = render(ConfigurationFields, {
+		fields: [
+			base,
+			{
+				...base,
+				id: 'events',
+				label: 'Events',
+				choice_source: { key: 'events', depends_on: null }
+			},
+			{
+				...base,
+				id: 'providers',
+				label: 'Lookups',
+				kind: 'string_set_map',
+				choice_source: { key: 'providers', depends_on: null }
+			}
+		],
+		values: { origins: ['http://absolute'], events: ['chat'], providers: { p0: ['first'] } },
+		choices: {
+			events: { items: [{ value: 'chat', label: 'Chat', detail: null }] },
+			providers: {
+				groups: Array.from({ length: 12 }, (_, i) => ({
+					id: `p${i}`,
+					label: `Provider ${i}`,
+					items: [{ value: 'first', label: `Lookup ${i}`, detail: null }]
+				}))
+			}
+		},
+		onChange
+	});
+	for (const text of ['Browser origins', 'Events', 'Lookups'])
+		expect(view.getByText(text).closest('details')?.open).toBe(false);
+	await fireEvent.click(view.getByText('Lookups'));
+	await fireEvent.input(view.getByLabelText('Search Lookups'), {
+		target: { value: 'Provider 11' }
+	});
+	expect(view.queryByText('Provider 0')).toBeNull();
+	await fireEvent.click(view.getByText('Provider 11'));
+	await fireEvent.click(view.getByRole('checkbox', { name: 'Lookup 11' }));
+	expect(onChange).toHaveBeenCalledWith({
+		origins: ['http://absolute'],
+		events: ['chat'],
+		providers: { p0: ['first'], p11: ['first'] }
+	});
+});
+
+it('renders scalar owner-supplied choices as a dropdown and preserves unavailable saved values', async () => {
+	const field: ConfigField = {
+		id: 'kind',
+		label: 'Support kind',
+		description: '',
+		introduced_in: 1,
+		required: true,
+		kind: 'text',
+		choice_source: { key: 'example.kinds', depends_on: null }
+	};
+	const onChange = vi.fn();
+	const view = render(ConfigurationFields, {
+		fields: [field],
+		values: { kind: 'sub' },
+		onChange,
+		choices: {
+			'example.kinds': {
+				items: [
+					{ value: 'sub', label: 'Subscription', detail: null },
+					{ value: 'resub', label: 'Resubscription', detail: null }
+				]
+			}
+		}
+	});
+	const select = view.getByRole('combobox', { name: 'Support kind' });
+	expect(select).toHaveProperty('value', 'sub');
+	await fireEvent.change(select, { target: { value: 'resub' } });
+	expect(onChange).toHaveBeenCalledWith({ kind: 'resub' });
+	await view.rerender({ values: { kind: 'retired' } });
+	expect(select).toHaveProperty('value', 'retired');
+	expect(view.getByRole('option', { name: 'retired (unavailable)' })).toBeTruthy();
+	await view.rerender({ choices: {} });
+	expect(select).toHaveProperty('disabled', true);
+	expect(select).toHaveProperty('value', 'retired');
 });

@@ -393,6 +393,8 @@ pub(crate) fn register_commands<R: Runtime>(builder: tauri::Builder<R>) -> tauri
         editor_close,
         action_schemas,
         action_definitions,
+        event_test_options,
+        event_test_send,
         action_choices,
         configuration_catalog,
         configuration_open,
@@ -1069,11 +1071,19 @@ async fn configuration_open(
                             .map_err(crate::configuration::provider_error)?,
                     },
                 ),
-                (ConnectionModule::Emotes, None) => {
-                    LoadedConnectionSettings::Emotes(snenk_bot::providers::EmotesSettings {
+                (ConnectionModule::Ffz, None) => {
+                    LoadedConnectionSettings::Ffz(snenk_bot::providers::FfzSettings {
                         enabled: services
                             .providers()
-                            .enabled(snenk_bot::providers::ProviderId::Emotes)
+                            .enabled(snenk_bot::providers::ProviderId::Ffz)
+                            .map_err(crate::configuration::provider_error)?,
+                    })
+                }
+                (ConnectionModule::Bttv, None) => {
+                    LoadedConnectionSettings::Bttv(snenk_bot::providers::BttvSettings {
+                        enabled: services
+                            .providers()
+                            .enabled(snenk_bot::providers::ProviderId::Bttv)
                             .map_err(crate::configuration::provider_error)?,
                     })
                 }
@@ -1366,6 +1376,51 @@ fn save_error(error: WorkflowSaveError) -> EditorError {
             "The workflow could not be saved. Your draft is still open.",
         ),
     }
+}
+
+/// Lists explicitly eligible senders and safe current consumer grants on a bounded worker.
+#[tauri::command]
+async fn event_test_options(
+    state: State<'_, DesktopBackend>,
+) -> Result<crate::event_testing::EventTestOptions, EventCommandError> {
+    let ready = state
+        .ready()
+        .map_err(|_| EventCommandError::unavailable())?;
+    let permit = Arc::clone(&ready.workers)
+        .try_acquire_owned()
+        .map_err(|_| {
+            EventCommandError::new(
+                EventCommandErrorCode::Busy,
+                "Event testing is busy. Try again shortly.",
+            )
+        })?;
+    let services = Arc::clone(&ready.services);
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        crate::event_testing::options(&services)
+    })
+    .await
+    .map_err(|_| EventCommandError::unavailable())?
+}
+
+/// Sends a transient test through the registered output capability without workflow dispatch.
+#[tauri::command]
+async fn event_test_send(
+    state: State<'_, DesktopBackend>,
+    request: crate::event_testing::SendTestEvent,
+) -> Result<(), EventCommandError> {
+    let ready = state
+        .ready()
+        .map_err(|_| EventCommandError::unavailable())?;
+    let _permit = Arc::clone(&ready.workers)
+        .try_acquire_owned()
+        .map_err(|_| {
+            EventCommandError::new(
+                EventCommandErrorCode::Busy,
+                "Event testing is busy. Try again shortly.",
+            )
+        })?;
+    crate::event_testing::send(&ready.services, request).await
 }
 
 #[cfg(test)]

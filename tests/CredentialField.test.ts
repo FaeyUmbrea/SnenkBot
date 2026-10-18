@@ -90,3 +90,18 @@ describe('CredentialField', () => {
 		expect(view.getByRole('button', { name: 'Remove secret' })).toHaveProperty('disabled', true);
 	});
 });
+
+it('shows saved presence and a masked placeholder without loading the stored value into the input', () => {
+	const view = render(CredentialField, {
+		descriptor,
+		contextKey: 'saved',
+		presence: 'stored',
+		onSave: vi.fn()
+	});
+	expect(view.getByText('Saved')).toBeTruthy();
+	const input = view.getByLabelText('Test secret') as HTMLInputElement;
+	expect(input.type).toBe('password');
+	expect(input.value).toBe('');
+	expect(input.placeholder).toContain('(saved)');
+	expect(view.getByRole('button', { name: 'Remove secret' })).toHaveProperty('disabled', false);
+});

@@ -192,7 +192,9 @@
 		{#if error}<p role="alert">{error}</p>{/if}
 		{#if loading && !page}<p role="status">Loading runs…</p>{/if}
 		{#if page}
-			<div class="column-heading"><span>Automation</span><span>Result / time</span></div>
+			<div class="column-heading list-heading">
+				<span>Automation</span><span>Result / time</span>
+			</div>
 			<ul class="runs">
 				{#each page.entries as entry (entry.kind === 'record' ? entry.summary.run_id : entry.file_name)}
 					<li>
@@ -343,11 +345,9 @@
 		padding: 14px 16px;
 	}
 	.column-heading {
-		min-height: 48px;
+		min-height: 32px;
 		align-items: center;
-		background: var(--side);
-		color: var(--muted);
-		font-size: 14px;
+		padding-block: 8px;
 	}
 	.runs {
 		list-style: none;
@@ -364,6 +364,9 @@
 		text-align: left;
 		border-radius: 0;
 		align-items: center;
+	}
+	.runs button:hover {
+		background: var(--surface);
 	}
 	.runs button.selected {
 		border-color: var(--amber);

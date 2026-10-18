@@ -42,6 +42,7 @@ it('keeps resource selections visible across draft revisions and saves collectio
 	};
 	let editor: EditorSnapshot_Serialize = {
 		session_id: 'test-editor',
+		trigger_schemas: {},
 		revision: 0,
 		draft: {
 			name: 'Test delivery',
@@ -174,5 +175,104 @@ it('keeps resource selections visible across draft revisions and saves collectio
 	expect(editor.draft.workflow.steps[0].kind).toMatchObject({
 		Action: { inputs: { recipients: { Literal: ['uuid-two'] }, mode: { Literal: 'repeat' } } }
 	});
+	await controller.dispose();
+});
+
+it('uses native trigger schemas for titles, list inputs and booleans without an integration-specific field map', async () => {
+	const base = { description: '', introduced_in: 1, required: true, choice_source: null };
+	let editor: EditorSnapshot_Serialize = {
+		session_id: 'schema-editor',
+		revision: 0,
+		saved_revision: 1,
+		dirty: false,
+		can_undo: false,
+		can_redo: false,
+		draft: {
+			name: 'Future automation',
+			enabled: true,
+			workflow: { id: 'future', revision: 1, overlap: false, steps: [], outputs: {} },
+			triggers: [
+				{
+					id: 'future-trigger',
+					enabled: true,
+					kind: {
+						kind: 'integration_event',
+						integration: 'future',
+						event: 'arrived',
+						filters: { names: [], restricted: false }
+					}
+				}
+			]
+		},
+		trigger_schemas: {
+			'future-trigger': {
+				id: 'future.filters',
+				version: 1,
+				title: 'Future event arrived',
+				outputs: [],
+				fields: [
+					{ ...base, id: 'names', label: 'Alternative names', kind: 'string_list' },
+					{ ...base, id: 'restricted', label: 'Restricted access', kind: 'toggle' }
+				]
+			}
+		}
+	};
+	const snapshot: DesktopSnapshot = {
+		sequence: 0,
+		startup: { state: 'ready' },
+		workflows: [],
+		connections: [],
+		reconfiguration_requests: [],
+		errors: [],
+		last_completed: null,
+		pending_input: null,
+		twitch_authentication: null
+	};
+	const client: DesktopClient = {
+		...createDesktopClient(async () => {
+			throw new Error('Unexpected request');
+		}),
+		actionDefinitions: async () => [],
+		configurationCatalog: async () => [],
+		twitchAccounts: async () => twitchAccounts(),
+		twitchLoginSnapshot: async () => null,
+		historyPage: async () => ({ entries: [], next_cursor: null }),
+		openEditor: async () => editor,
+		closeEditor: async () => {},
+		applyEditorEdit: vi.fn(async ({ edit }) => {
+			if (edit.operation !== 'trigger_kind') throw new Error('Unexpected edit');
+			editor = {
+				...editor,
+				revision: editor.revision + 1,
+				dirty: true,
+				draft: { ...editor.draft, triggers: [{ ...editor.draft.triggers[0], kind: edit.kind }] }
+			};
+			return editor;
+		})
+	};
+	const controller = createApplicationController(client, (callbacks) => {
+		callbacks.onSnapshot(snapshot);
+		return { ready: Promise.resolve(), dispose: () => {}, refresh: async () => {} };
+	});
+	await controller.initialize();
+	await controller.openWorkflow('future');
+	const view = render(EditorView, { controller });
+	expect(view.getByText('Future event arrived')).toBeTruthy();
+	expect(view.getByText('Alternative names').closest('details')?.open).toBe(false);
+	await fireEvent.click(view.getByText('Alternative names'));
+	await fireEvent.input(view.getByLabelText('Add Alternative names'), {
+		target: { value: 'another' }
+	});
+	await fireEvent.keyDown(view.getByLabelText('Add Alternative names'), { key: 'Enter' });
+	await waitFor(() => expect(client.applyEditorEdit).toHaveBeenCalledTimes(1));
+	await waitFor(() =>
+		expect(view.getByLabelText('Alternative names item 1')).toHaveProperty('value', 'another')
+	);
+	await fireEvent.click(view.getByRole('checkbox', { name: 'Restricted access' }));
+	await waitFor(() => expect(client.applyEditorEdit).toHaveBeenCalledTimes(2));
+	expect(editor.draft.triggers[0].kind).toMatchObject({
+		filters: { names: ['another'], restricted: true }
+	});
+	expect(view.queryByDisplayValue('[]')).toBeNull();
 	await controller.dispose();
 });

@@ -42,6 +42,7 @@ it('mounts the real application and preserves a settings draft while opening, ed
 	};
 	let editor: EditorSnapshot_Serialize = {
 		session_id: 'editor',
+		trigger_schemas: {},
 		revision: 0,
 		draft: {
 			name: 'Stream details',
@@ -62,6 +63,7 @@ it('mounts the real application and preserves a settings draft while opening, ed
 		defaults: { title: '' },
 		values: { title: 'Original' },
 		authorization: null,
+		actions: [],
 		authorization_ready: false,
 		collection: null,
 		credential: null
@@ -162,7 +164,7 @@ it('mounts the real application and preserves a settings draft while opening, ed
 	expect(screen.getByRole('button', { name: 'Retry settings' })).toBeTruthy();
 	await fireEvent.click(screen.getByRole('button', { name: 'Retry settings' }));
 
-	await screen.findByRole('heading', { name: 'API server', level: 1 });
+	await screen.findByRole('region', { name: 'API server settings' });
 	expect(screen.getByRole('textbox', { name: 'Title' })).toBeTruthy();
 	expect(client.openConfiguration).toHaveBeenLastCalledWith({ module: 'api', record_id: null });
 	expect(screen.queryByRole('button', { name: /^Add$/ })).toBeNull();
@@ -175,7 +177,7 @@ it('mounts the real application and preserves a settings draft while opening, ed
 	await controller.openSettings('pronouns');
 	await screen.findByRole('region', { name: 'Pronouns settings' });
 	expect(screen.getByRole('textbox', { name: 'Title' })).toBeTruthy();
-	await fireEvent.click(screen.getByRole('button', { name: /^Back$/ }));
+	await fireEvent.click(screen.getByRole('button', { name: 'Back to previous view' }));
 	await screen.findByRole('region', { name: 'API server settings' });
 	expect(screen.queryByRole('region', { name: 'Pronouns settings' })).toBeNull();
 });

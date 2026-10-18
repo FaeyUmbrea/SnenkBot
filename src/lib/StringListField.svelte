@@ -77,7 +77,7 @@
 	}
 </script>
 
-<details class="list-field" open={!collapsible || values.length > 0}>
+<details class="list-field" open={!collapsible}>
 	<summary><strong>{label}</strong><span class="count">{values.length}</span></summary>
 	{#if description}<p class="description">{description}</p>{/if}
 	{#if values.length === 0}<p class="empty">No entries added.</p>{/if}
@@ -93,6 +93,7 @@
 					onkeydown={(event) => rowKey(event, index)}
 				/>
 				<button
+					class="field-button"
 					type="button"
 					{disabled}
 					aria-label={`Remove ${label} item ${index + 1}`}
@@ -125,7 +126,7 @@
 							>{choice.label}</option
 						>{/each}</datalist
 				>{/if}
-			<button type="button" {disabled} onclick={add}>Add</button>
+			<button class="field-button" type="button" {disabled} onclick={add}>Add</button>
 		</div>
 	</div>
 	{#if error}<p class="error" role="alert">{error}</p>{/if}
@@ -133,13 +134,15 @@
 
 <style>
 	.list-field {
-		margin: 12px 0;
-		padding: 0 0 0 12px;
-		border-left: 2px solid var(--border);
+		margin: 0;
+		padding: 0 16px;
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		background: var(--side);
 	}
 	summary {
 		cursor: pointer;
-		padding: 6px 0;
+		padding: 14px 0;
 	}
 	.count {
 		display: inline-block;
@@ -161,7 +164,7 @@
 	.entries {
 		display: grid;
 		gap: 6px;
-		max-width: 720px;
+		max-width: none;
 		padding: 4px 0 10px;
 	}
 	.entry {

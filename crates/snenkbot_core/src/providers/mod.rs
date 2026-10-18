@@ -19,8 +19,9 @@ use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 
 pub use integration::{ProviderIntegration, ProviderIntegrationError};
 pub use settings::{
-    EmotesSettings, LoadedProviderSettings, PronounsSettings, ProviderId, ProviderSettings,
-    ProviderSettingsError, ProviderSettingsStore, STEAMGRIDDB_KEY_CREDENTIAL, SteamGridDbSettings,
+    BttvSettings, EmotesSettings, FfzSettings, LoadedProviderSettings, PronounsSettings,
+    ProviderId, ProviderSettings, ProviderSettingsError, ProviderSettingsStore,
+    STEAMGRIDDB_KEY_CREDENTIAL, SteamGridDbSettings,
 };
 
 /// A compiled operation available through the provider API and workflow engine.
@@ -34,9 +35,9 @@ pub struct ProviderOperation {
 /// A compiled provider and the operations it exposes.
 #[derive(Clone, Debug, Serialize)]
 pub struct ProviderDescriptor {
-    /// Typed settings owner supplied by the compiled provider registration.
+    /// Settings owner for a service; aggregate compatibility operations have no separate settings.
     #[serde(skip)]
-    pub configuration: ProviderId,
+    pub configuration: Option<ProviderId>,
     pub id: &'static str,
     pub title: &'static str,
     pub operations: Vec<ProviderOperation>,
@@ -232,7 +233,9 @@ impl ProviderServices {
         let settings = self.settings();
         let enabled = match provider {
             "steamgriddb" => settings.steamgriddb_enabled,
-            "emotes" => settings.emotes_enabled,
+            "emotes" => ProviderId::Ffz.enabled(&settings) || ProviderId::Bttv.enabled(&settings),
+            "ffz" => ProviderId::Ffz.enabled(&settings),
+            "bttv" => ProviderId::Bttv.enabled(&settings),
             "pronouns" => settings.pronouns_enabled,
             _ => return Err(ProviderError::UnknownOperation),
         };
@@ -291,9 +294,10 @@ impl ProviderServices {
                 let args: ResolveArguments = parse_arguments(arguments)?;
                 self.resolve(&valid_name(&args.name)?, args.game_id).await
             }
-            ("emotes", "resolve") => {
+            ("emotes" | "ffz" | "bttv", "resolve") => {
                 let args: ChannelArguments = parse_arguments(arguments)?;
-                self.emotes(&valid_channel_id(&args.channel_id)?).await
+                self.emotes(&valid_channel_id(&args.channel_id)?, provider)
+                    .await
             }
             ("pronouns", "resolve") => {
                 let args: LoginArguments = parse_arguments(arguments)?;
@@ -448,9 +452,9 @@ impl ProviderServices {
     }
 
     /// Merges available global and channel FFZ/BTTV emotes by name.
-    async fn emotes(&self, channel_id: &str) -> Result<Value, ProviderError> {
+    async fn emotes(&self, channel_id: &str, provider: &str) -> Result<Value, ProviderError> {
         self.cached(
-            format!("emotes:{channel_id}"),
+            format!("{provider}:emotes:{channel_id}"),
             Duration::from_secs(900),
             || async {
                 let urls = [
@@ -473,10 +477,21 @@ impl ProviderServices {
                 ];
                 let mut entries = std::collections::BTreeMap::new();
                 let mut succeeded = 0;
+                let settings = self.settings();
                 let responses =
-                    join_all(urls.into_iter().map(|(url, kind)| async move {
-                        (kind, self.transport.get(url, None).await)
-                    }))
+                    join_all(
+                        urls.into_iter()
+                            .filter(|(_, kind)| {
+                                if *kind == "ffz" {
+                                    provider != "bttv" && ProviderId::Ffz.enabled(&settings)
+                                } else {
+                                    provider != "ffz" && ProviderId::Bttv.enabled(&settings)
+                                }
+                            })
+                            .map(|(url, kind)| async move {
+                                (kind, self.transport.get(url, None).await)
+                            }),
+                    )
                     .await;
                 for (kind, response) in responses {
                     let response = match response {
@@ -920,6 +935,7 @@ mod tests {
                 steamgriddb_enabled: true,
                 emotes_enabled: true,
                 pronouns_enabled: true,
+                ..Default::default()
             },
             Arc::new(Secrets(Some("test-key".into()))),
             transport,
@@ -1196,7 +1212,7 @@ mod tests {
     #[test]
     fn catalog_matches_compiled_action_names() {
         let catalog = super::catalog();
-        assert_eq!(catalog.len(), 3);
+        assert_eq!(catalog.len(), 5);
         assert_eq!(catalog[0].id, "steamgriddb");
         assert_eq!(
             catalog[0]
@@ -1206,7 +1222,94 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["search", "icons", "resolve"]
         );
-        assert_eq!(catalog[1].operations[0].action, "emotes.resolve");
-        assert_eq!(catalog[2].operations[0].action, "pronouns.resolve");
+        assert_eq!(catalog[1].operations[0].action, "ffz.resolve");
+        assert_eq!(catalog[2].operations[0].action, "bttv.resolve");
+        assert_eq!(catalog[3].operations[0].action, "pronouns.resolve");
+        assert!(
+            catalog[..4]
+                .iter()
+                .all(|provider| provider.configuration.is_some())
+        );
+        assert_eq!(catalog[4].id, "emotes");
+        assert!(catalog[4].configuration.is_none());
+    }
+    /// Individual and compatibility lookups only contact enabled emote services.
+    #[tokio::test]
+    async fn emotes_respect_independent_source_switches() {
+        let transport = Arc::new(FakeTransport::default());
+        transport.respond(
+            "https://api.frankerfacez.com/v1/set/global",
+            404,
+            Value::Null,
+        );
+        transport.respond(
+            "https://api.frankerfacez.com/v1/room/id/123",
+            404,
+            Value::Null,
+        );
+        transport.respond(
+            "https://api.betterttv.net/3/cached/emotes/global",
+            404,
+            Value::Null,
+        );
+        transport.respond(
+            "https://api.betterttv.net/3/cached/users/twitch/123",
+            404,
+            Value::Null,
+        );
+        let services = services(transport.clone());
+        for (enabled, disabled, settings) in [
+            (
+                "ffz",
+                "bttv",
+                ProviderSettings {
+                    ffz_enabled: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "bttv",
+                "ffz",
+                ProviderSettings {
+                    bttv_enabled: true,
+                    ..Default::default()
+                },
+            ),
+        ] {
+            services.set_settings(settings);
+            transport.calls.lock().unwrap().clear();
+            assert!(matches!(
+                services
+                    .call(disabled, "resolve", json!({"channelId":"123"}))
+                    .await,
+                Err(ProviderError::Disabled)
+            ));
+            assert_eq!(
+                services
+                    .call(enabled, "resolve", json!({"channelId":"123"}))
+                    .await
+                    .unwrap(),
+                json!([])
+            );
+            assert_eq!(
+                services
+                    .call("emotes", "resolve", json!({"channelId":"123"}))
+                    .await
+                    .unwrap(),
+                json!([])
+            );
+            let calls = transport.calls.lock().unwrap();
+            assert_eq!(calls.len(), 4);
+            assert!(calls.iter().all(|url| if enabled == "ffz" {
+                url.contains("frankerfacez")
+            } else {
+                url.contains("betterttv")
+            }));
+        }
+        services.set_settings(ProviderSettings::default());
+        assert!(matches!(
+            services.ready("emotes"),
+            Err(ProviderError::Disabled)
+        ));
     }
 }

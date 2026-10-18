@@ -230,6 +230,7 @@ pub struct AppServices {
     vtube: Arc<VtubeIntegration>,
     action_schemas: Vec<&'static ConfigSchema>,
     action_definitions: Vec<crate::schema::ActionDefinition>,
+    event_tests: crate::event_testing::EventTestCatalog,
     choices: ChoiceCatalog,
     event_history: EventHistory,
     configuration_sources: Vec<Arc<dyn ConfigurationStatus>>,
@@ -276,6 +277,7 @@ impl AppServices {
         );
         let action_schemas = engine.action_schemas();
         let action_definitions = engine.action_definitions();
+        let event_tests = engine.event_tests();
         choices
             .validate_schemas(&action_schemas)
             .map_err(AppServiceError::InvalidSchema)?;
@@ -673,6 +675,7 @@ impl AppServices {
             vtube,
             action_schemas,
             action_definitions,
+            event_tests,
             choices,
             event_history,
         })
@@ -791,6 +794,11 @@ impl AppServices {
 
     pub fn vtube(&self) -> &Arc<VtubeIntegration> {
         &self.vtube
+    }
+
+    /// Provides explicitly registered output senders for direct overlay testing.
+    pub fn event_tests(&self) -> &crate::event_testing::EventTestCatalog {
+        &self.event_tests
     }
 
     pub fn action_definitions(&self) -> &[crate::schema::ActionDefinition] {

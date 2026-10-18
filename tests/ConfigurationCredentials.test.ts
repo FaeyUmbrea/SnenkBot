@@ -28,6 +28,7 @@ const snapshot: ConfigurationSnapshot = {
 	defaults: { host: 'localhost' },
 	values: { host: 'localhost' },
 	authorization: null,
+	actions: [],
 	authorization_ready: false,
 	collection: null,
 	credential: {

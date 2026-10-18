@@ -119,7 +119,19 @@
 
 <div class="field-row credential-field">
 	<div class="field-copy">
-		<label for={`credential-${descriptor.id}`}>{descriptor.label}</label>
+		<div class="credential-heading">
+			<label for={`credential-${descriptor.id}`}>{descriptor.label}</label><span
+				class="presence"
+				class:stored={currentPresence === 'stored'}
+				>{checking
+					? 'Checking…'
+					: currentPresence === 'stored'
+						? 'Saved'
+						: currentPresence === 'empty'
+							? 'Not set'
+							: 'Status unavailable'}</span
+			>
+		</div>
 		<p>
 			{currentPresence === 'stored'
 				? descriptor.storedDescription
@@ -133,6 +145,7 @@
 			id={`credential-${descriptor.id}`}
 			type="password"
 			autocomplete="new-password"
+			placeholder={currentPresence === 'stored' ? '•••••••• (saved)' : 'Enter a value'}
 			value={draft}
 			oninput={updateDraft}
 			onchange={updateDraft}
@@ -167,14 +180,26 @@
 {#if message}<p role="status">{message}</p>{/if}
 
 <style>
+	.credential-heading {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 16px;
+	}
+	.presence {
+		color: var(--muted);
+		font-size: 12px;
+	}
+	.presence.stored {
+		color: #79bd8e;
+	}
 	.field-row {
 		display: grid;
-		grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr);
+		grid-template-columns: 1fr;
 		gap: 16px;
 		align-items: center;
 		min-height: 48px;
-		padding: 8px 0;
-		border-bottom: 1px solid var(--border);
+		padding: 0;
 	}
 	.field-copy p {
 		margin: 4px 0 0;

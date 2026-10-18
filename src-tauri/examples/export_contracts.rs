@@ -50,6 +50,8 @@ fn export_contracts(output: &std::path::Path) -> Result<(), Box<dyn Error>> {
         .register::<snenkbot_desktop::api_admin::ImportSupportHistory>()
         .register::<snenkbot_desktop::api_admin::CreateApiConsumer>()
         .register::<snenk_bot::api::CreatedConsumer>()
+        .register::<snenkbot_desktop::event_testing::EventTestOptions>()
+        .register::<snenkbot_desktop::event_testing::SendTestEvent>()
         .register::<snenkbot_desktop::choices::ActionChoices>()
         .register::<snenk_bot::choices::ConfigChoice>()
         .register::<CreateWorkflow>()

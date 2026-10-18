@@ -12,6 +12,8 @@ const connections: Connection[] = [
 		connection: 'main',
 		title: 'OBS Studio',
 		state: 'connected',
+		show_when_healthy: true,
+		state_label: 'Connected',
 		detail: 'Recording'
 	},
 	{
@@ -19,6 +21,8 @@ const connections: Connection[] = [
 		connection: 'broadcaster',
 		title: 'Twitch Broadcaster Account',
 		state: 'connecting',
+		show_when_healthy: true,
+		state_label: 'Connecting',
 		detail: ''
 	}
 ];
@@ -77,17 +81,17 @@ describe('Desktop shell', () => {
 describe('Connection status', () => {
 	it('counts the supplied configured facets and changes severity as their state changes', async () => {
 		const view = render(ConnectionStatus, { connections, onConfigure: vi.fn() });
-		expect(view.getByText('Connected 1/2')).toBeTruthy();
+		expect(view.getByText('Connections 1/2')).toBeTruthy();
 		expect(view.container.querySelector('summary .pip.connecting')).toBeTruthy();
 		await view.rerender({
 			connections: connections.map((item) => ({ ...item, state: 'connected' as const }))
 		});
-		expect(view.getByText('Connected 2/2')).toBeTruthy();
+		expect(view.getByText('Connections 2/2')).toBeTruthy();
 		expect(view.container.querySelector('summary .pip.connected')).toBeTruthy();
 		await view.rerender({ connections: [{ ...connections[0], state: 'error' }] });
 		expect(view.container.querySelector('summary .pip.error')).toBeTruthy();
 		await view.rerender({ connections: [] });
-		expect(view.getByText('Connected 0/0')).toBeTruthy();
+		expect(view.getByText('Connections 0/0')).toBeTruthy();
 		expect(view.container.querySelector('summary .pip.inactive')).toBeTruthy();
 	});
 	it('opens detailed states, routes recovery by facet and closes on Escape or outside pointer', async () => {
@@ -104,7 +108,7 @@ describe('Connection status', () => {
 				}
 			]
 		});
-		const summary = view.getByLabelText('Connections: 1 of 2 connected');
+		const summary = view.getByLabelText('Connections: 1 of 2 healthy');
 		await fireEvent.click(summary);
 		expect(view.container.querySelector('details')).toHaveProperty('open', true);
 		expect(view.getByText('Twitch Broadcaster Account')).toBeTruthy();
@@ -142,7 +146,7 @@ describe('Connection status', () => {
 			],
 			onConfigure: vi.fn()
 		});
-		await fireEvent.click(view.getByLabelText('Connections: 1 of 2 connected'));
+		await fireEvent.click(view.getByLabelText('Connections: 1 of 2 healthy'));
 		expect(view.queryByText('Recording')).toBeNull();
 		expect(view.getByText('Reconnect the broadcaster account.')).toBeTruthy();
 		expect(view.getByText('Ad events need new permission')).toBeTruthy();
@@ -151,4 +155,72 @@ describe('Connection status', () => {
 		expect(healthy?.querySelectorAll('p')).toHaveLength(0);
 		expect(view.getByRole('button', { name: 'Configure OBS Studio' })).toBeTruthy();
 	});
+});
+
+it('uses owner-defined state labels and puts errors before recovery and healthy services', async () => {
+	const rows: Connection[] = [
+		{ ...connections[0], integration: 'api', title: 'API server', state_label: 'Running' },
+		{
+			...connections[1],
+			integration: 'obs',
+			title: 'OBS Studio',
+			state: 'error',
+			show_when_healthy: true,
+			state_label: 'Unavailable',
+			detail: 'Cannot reach OBS.'
+		},
+		{ ...connections[1], integration: 'other', title: 'Another service' }
+	];
+	const view = render(ConnectionStatus, { connections: rows, onConfigure: vi.fn() });
+	await fireEvent.click(view.getByLabelText('Connections: 1 of 3 healthy'));
+	const titles = [...view.container.querySelectorAll('li strong')].map((node) => node.textContent);
+	expect(titles).toEqual(['OBS Studio', 'Another service', 'API server']);
+	expect(view.getByText('Running')).toBeTruthy();
+	expect(view.getByText('Unavailable')).toBeTruthy();
+	expect(view.queryByText('Recording')).toBeNull();
+});
+
+it('keeps background services quiet until they need attention and removes them after recovery', async () => {
+	const lookup: Connection = {
+		...connections[0],
+		integration: 'new-lookup-provider',
+		connection: 'lookup',
+		title: 'Background lookup',
+		show_when_healthy: false,
+		state_label: 'Ready'
+	};
+	const view = render(ConnectionStatus, {
+		connections: [...connections, lookup],
+		onConfigure: vi.fn()
+	});
+	await fireEvent.click(view.getByLabelText('Connections: 1 of 2 healthy'));
+	expect(view.queryByText('Background lookup')).toBeNull();
+	expect(view.getByText('OBS Studio')).toBeTruthy();
+
+	await view.rerender({
+		connections: [...connections, { ...lookup, state: 'error', state_label: 'Unavailable' }]
+	});
+	expect(view.getByLabelText('Connections: 1 of 3 healthy')).toBeTruthy();
+	expect(view.container.querySelector('li strong')?.textContent).toBe('Background lookup');
+
+	await view.rerender({ connections: [...connections, lookup] });
+	expect(view.queryByText('Background lookup')).toBeNull();
+	expect(view.getByLabelText('Connections: 1 of 2 healthy')).toBeTruthy();
+
+	await view.rerender({
+		requests: [
+			{
+				integration: lookup.integration,
+				connection: lookup.connection,
+				reason: 'Update lookup credentials',
+				affected_features: []
+			}
+		]
+	});
+	expect(view.getByText('Background lookup')).toBeTruthy();
+	expect(view.getByText('Update lookup credentials')).toBeTruthy();
+
+	await view.rerender({ connections: [lookup], requests: [] });
+	expect(view.getByLabelText('Connections: 0 of 0 healthy')).toBeTruthy();
+	expect(view.getByText('No connections need attention.')).toBeTruthy();
 });

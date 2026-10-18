@@ -8,6 +8,8 @@
 			connection: 'main',
 			title: 'OBS Studio',
 			state: 'connected',
+			show_when_healthy: true,
+			state_label: 'Connected',
 			detail: 'Ready for recording'
 		},
 		{
@@ -15,6 +17,8 @@
 			connection: 'broadcaster',
 			title: 'Twitch broadcaster',
 			state: 'connected',
+			show_when_healthy: true,
+			state_label: 'Connected',
 			detail: 'Chat and events connected'
 		},
 		{
@@ -22,6 +26,8 @@
 			connection: 'main',
 			title: 'VTube Studio',
 			state: 'connecting',
+			show_when_healthy: true,
+			state_label: 'Connecting',
 			detail: 'Connecting…'
 		}
 	];

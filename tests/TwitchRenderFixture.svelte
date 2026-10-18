@@ -43,6 +43,8 @@
 			connection: 'broadcaster',
 			title: 'Twitch Broadcaster Account',
 			state: 'connected',
+			show_when_healthy: true,
+			state_label: 'Signed in',
 			detail: 'Signed in as faey'
 		}
 	];
@@ -51,7 +53,7 @@
 
 <DesktopShell
 	page="streaming"
-	title="Streaming Services"
+	title="Twitch"
 	{connections}
 	onNavigate={noEffect}
 	onConfigure={noEffect}
@@ -60,6 +62,7 @@
 	<div class="content">
 		<AccountConnectionsView
 			{accounts}
+			showTitle={false}
 			{authentication}
 			{connections}
 			onStart={async (role) => {

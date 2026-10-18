@@ -299,6 +299,14 @@ impl crate::integration::ConfigurationStatus for TwitchIntegration {
                 connection: connection.into(),
                 title: title.into(),
                 state,
+                show_when_healthy: true,
+                state_label: match state {
+                    ConnectionState::Inactive => "Not configured",
+                    ConnectionState::Connecting => "Checking",
+                    ConnectionState::Connected => "Signed in",
+                    ConnectionState::Error => "Error",
+                }
+                .into(),
                 detail,
             });
         }
@@ -324,6 +332,14 @@ impl crate::integration::ConfigurationStatus for TwitchIntegration {
                 connection: "events".into(),
                 title: "Twitch events".into(),
                 state,
+                show_when_healthy: true,
+                state_label: match state {
+                    ConnectionState::Inactive => "Disconnected",
+                    ConnectionState::Connecting => "Connecting",
+                    ConnectionState::Connected => "Connected",
+                    ConnectionState::Error => "Error",
+                }
+                .into(),
                 detail,
             });
         }
@@ -405,15 +421,16 @@ mod tests {
     use serde_json::json;
     use session::TwitchAuthorizationHealth as Health;
 
+    /// Support recording requires scopes even when no overlay consumer is connected.
     #[test]
-    fn overlay_only_demand_reports_scope_reauthorization_and_clears_on_drop() {
+    fn support_recording_demand_survives_overlay_disconnect() {
         let temporary = tempfile::tempdir().unwrap();
         let paths = AppPaths {
             config: temporary.path().join("config"),
             data: temporary.path().join("data"),
             state: temporary.path().join("state"),
         };
-        let hub = crate::api::EventHub::new(&paths, false, 500);
+        let hub = crate::api::EventHub::new(&paths, 500);
         let accounts: accounts::ConnectedAccounts = serde_json::from_value(json!({
             "broadcaster": {
                 "user_id":"100", "login":"owner",
@@ -427,8 +444,8 @@ mod tests {
             let receiver = hub.subscribe_demand();
             events::overlay_kinds(&receiver.borrow())
         };
-        assert!(demanded().is_empty());
-        assert!(configuration_request(&accounts, &demanded()).is_none());
+        assert!(demanded().contains(&events::EventSubKind::ChannelSubscribe));
+        assert!(configuration_request(&accounts, &demanded()).is_some());
         let changed = hub.subscribe_demand_changes();
         let lease = hub.subscribe(
             BTreeSet::from(["twitch.support".into()]),
@@ -438,8 +455,8 @@ mod tests {
         assert!(demanded().contains(&events::EventSubKind::ChannelSubscribe));
         assert!(configuration_request(&accounts, &demanded()).is_some());
         drop(lease);
-        assert!(demanded().is_empty());
-        assert!(configuration_request(&accounts, &demanded()).is_none());
+        assert!(demanded().contains(&events::EventSubKind::ChannelSubscribe));
+        assert!(configuration_request(&accounts, &demanded()).is_some());
     }
 
     #[test]

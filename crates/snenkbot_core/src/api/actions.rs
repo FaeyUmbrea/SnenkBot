@@ -232,14 +232,32 @@ pub(super) fn register(engine: &mut Engine, choices: &mut ChoiceCatalog, service
         "api.consumers",
         Arc::clone(&service) as Arc<dyn ChoiceProvider>,
     );
-    for (definition, kind) in [
-        (ActionDefinition::of::<ChatInputs>(), Action::Chat),
-        (ActionDefinition::of::<SupportInputs>(), Action::Support),
-        (ActionDefinition::of::<GameInputs>(), Action::Game),
-        (ActionDefinition::of::<CustomInputs>(), Action::Custom),
+    for (definition, kind, channel) in [
+        (
+            ActionDefinition::of::<ChatInputs>(),
+            Action::Chat,
+            "twitch.chat",
+        ),
+        (
+            ActionDefinition::of::<SupportInputs>(),
+            Action::Support,
+            "twitch.support",
+        ),
+        (
+            ActionDefinition::of::<GameInputs>(),
+            Action::Game,
+            "twitch.channel",
+        ),
+        (
+            ActionDefinition::of::<CustomInputs>(),
+            Action::Custom,
+            "api.custom",
+        ),
     ] {
-        engine.register_lua_action_definition(
+        engine.register_event_test_action(
             definition,
+            "consumers",
+            channel,
             Arc::new(ApiAction {
                 kind,
                 service: Arc::clone(&service),
@@ -509,6 +527,46 @@ mod tests {
         let mut engine = Engine::new(Arc::new(NoInput), Arc::new(|_| {}));
         let providers = ProviderIntegration::register(&paths, &mut engine).unwrap();
         (ApiService::new(&paths, providers), engine)
+    }
+
+    /// Registered test senders retain their defaults and deliver only to the selected output.
+    #[tokio::test]
+    async fn direct_test_catalog_reuses_registered_defaults_and_targeted_delivery() {
+        let temporary = tempfile::tempdir().unwrap();
+        let (service, mut engine) = service(temporary.path());
+        enable(&service);
+        let alice = consumer(&service, "Alice", "twitch.chat");
+        let bob = consumer(&service, "Bob", "twitch.chat");
+        let channels = BTreeSet::from(["twitch.chat".into()]);
+        let mut alice_stream =
+            service
+                .events
+                .subscribe_for_consumer(Some(&alice), channels.clone(), BTreeMap::new());
+        let mut bob_stream =
+            service
+                .events
+                .subscribe_for_consumer(Some(&bob), channels, BTreeMap::new());
+        register(
+            &mut engine,
+            &mut ChoiceCatalog::default(),
+            Arc::clone(&service),
+        );
+        let catalog = engine.event_tests();
+        assert_eq!(catalog.senders().len(), 4);
+        let sender = catalog
+            .senders()
+            .into_iter()
+            .find(|sender| sender.definition.schema.id == "api.send_chat")
+            .unwrap();
+        let mut values = sender.definition.defaults;
+        values.insert(sender.target_field, json!([alice]));
+        catalog.send("api.send_chat", 1, values).await.unwrap();
+        let frame = alice_stream.receiver.try_recv().unwrap();
+        assert_eq!(frame.channel, "twitch.chat");
+        assert_eq!(frame.data["parts"][0]["text"], "Hello from SnenkBot!");
+        let private_frame = bob_stream.receiver.try_recv().unwrap();
+        assert!(frame.visible_to(&alice));
+        assert!(!private_frame.visible_to(&bob));
     }
 
     /// Marks the test listener as bound without creating any actual network service.

@@ -46,10 +46,10 @@ const catalog: ConfigurationCatalogEntry[] = [
 		error: null
 	},
 	{
-		id: 'emotes',
+		id: 'ffz',
 		title: 'Emotes',
 		category: 'devices',
-		module: 'emotes',
+		module: 'ffz',
 		record_id: null,
 		configured: false,
 		error: null
@@ -90,6 +90,7 @@ function snapshot(sequence = 0): DesktopSnapshot {
 function editor(id = 'one', revision = 0): EditorSnapshot_Serialize {
 	return {
 		session_id: `session-${id}`,
+		trigger_schemas: {},
 		revision,
 		draft: { enabled: true, workflow: { ...workflow, id }, triggers: [] },
 		dirty: revision > 0,
@@ -108,6 +109,7 @@ function configuration(module: ConnectionModule = 'obs'): ConfigurationSnapshot 
 		values: { title: 'Original' },
 		credential: null,
 		authorization: null,
+		actions: [],
 		authorization_ready: false,
 		collection: null
 	};
@@ -118,6 +120,8 @@ function connection(integration: string): ConnectionStatus {
 		connection: 'lookup',
 		title: integration,
 		state: 'connected',
+		show_when_healthy: true,
+		state_label: 'Connected',
 		detail: 'Ready'
 	};
 }
@@ -312,19 +316,19 @@ describe('application lifetime', () => {
 	});
 	it('routes configured connections using the native catalog and rejects unknown targets', async () => {
 		const ownCatalog = catalog.map((entry) =>
-			entry.id === 'emotes' ? { ...entry, category: 'broadcast' as const } : entry
+			entry.id === 'ffz' ? { ...entry, category: 'broadcast' as const } : entry
 		);
 		const h = harness({ configurationCatalog: vi.fn(async () => ownCatalog) });
 		await h.controller.initialize();
-		await h.controller.configure(connection('emotes'));
+		await h.controller.configure(connection('ffz'));
 		expect(get(h.controller).page).toBe('broadcast');
-		expect(get(h.controller).configurationModule).toBe('emotes');
-		expect(h.client.openConfiguration).toHaveBeenCalledWith({ module: 'emotes', record_id: null });
+		expect(get(h.controller).configurationModule).toBe('ffz');
+		expect(h.client.openConfiguration).toHaveBeenCalledWith({ module: 'ffz', record_id: null });
 		const before = get(h.controller).returnRoutes;
 		await expect(h.controller.configure(connection('unknown'))).rejects.toThrow(
 			'This connection has no available settings page.'
 		);
-		expect(get(h.controller).configurationModule).toBe('emotes');
+		expect(get(h.controller).configurationModule).toBe('ffz');
 		expect(get(h.controller).returnRoutes).toEqual(before);
 		await h.controller.configure(connection('twitch'));
 		expect(get(h.controller).page).toBe('accounts');

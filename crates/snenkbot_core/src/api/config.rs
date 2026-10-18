@@ -31,6 +31,16 @@ pub const CONSUMERS_COLLECTION: ConfigurationCollectionDescriptor =
         description: "Manage the overlays and applications that can access SnenkBot.",
     };
 
+/// Tools available from the API server's generated settings form.
+pub const SERVER_ACTIONS: &[crate::schema::ConfigurationActionDescriptor] =
+    &[crate::schema::ConfigurationActionDescriptor {
+        id: "api.test_events",
+        label: "Send test event…",
+        description: "Send a synthetic event directly to an API consumer.",
+        confirmation: None,
+        success_message: "",
+    }];
+
 /// Channel, provider, and secret permissions granted to one consumer.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, crate::ConfigSchema)]
 #[serde(deny_unknown_fields)]
@@ -59,15 +69,15 @@ pub struct ConsumerPermissions {
     pub providers: BTreeMap<String, BTreeSet<String>>,
     #[config(
         id = "readable_secrets",
-        label = "Read secrets",
-        description = "Allow this consumer to read these named secrets from its own storage. Leave empty if it does not need secret access.",
+        label = "Readable secret names",
+        description = "Secret names this consumer may read with GET /api/v1/secrets/{name}. Values live in its OS credential storage; these entries grant access, not values.",
         introduced = 1
     )]
     pub readable_secrets: BTreeSet<String>,
     #[config(
         id = "writable_secrets",
-        label = "Write secrets",
-        description = "Allow this consumer to save or replace these named secrets in its own storage. These are names, not secret values.",
+        label = "Writable secret names",
+        description = "Secret names this consumer may save with PUT /api/v1/secrets/{name}, using a JSON value field. Use null to remove a value.",
         introduced = 1
     )]
     pub writable_secrets: BTreeSet<String>,
@@ -109,6 +119,7 @@ pub struct ConsumerSummary {
     version = 1,
     title = "API server",
     collection = CONSUMERS_COLLECTION,
+    actions = SERVER_ACTIONS,
     category = "general",
     integration = "api"
 )]
@@ -120,8 +131,6 @@ pub struct ApiSettings {
     pub host: String,
     #[config(id = "port", label = "Port", introduced = 1)]
     pub port: u16,
-    #[config(id = "record_support", label = "Record support events", introduced = 1)]
-    pub record_support: bool,
     #[config(
         id = "support_retention",
         label = "Support history size",
@@ -132,13 +141,12 @@ pub struct ApiSettings {
 }
 
 impl Default for ApiSettings {
-    /// Keeps the local listener and recording disabled until configured.
+    /// Keeps the local listener disabled and bounds automatically recorded support history.
     fn default() -> Self {
         Self {
             enabled: false,
             host: "127.0.0.1".into(),
             port: 38764,
-            record_support: false,
             support_retention: 500,
         }
     }
@@ -800,8 +808,12 @@ fn decode_config(config: &StoredConfig) -> Result<ApiSettings, ApiError> {
     if config.definition != DEFINITION || config.version != VERSION {
         return Err(ApiError::InvalidFormat);
     }
-    let value: ApiSettings =
-        serde_json::from_value(config.data.clone()).map_err(|_| ApiError::InvalidFormat)?;
+    let mut data = config.data.clone();
+    // Older settings included a recording switch; support is now always recorded.
+    if let Some(values) = data.as_object_mut() {
+        values.remove("record_support");
+    }
+    let value: ApiSettings = serde_json::from_value(data).map_err(|_| ApiError::InvalidFormat)?;
     validate_config(&value).map_err(|_| ApiError::InvalidFormat)?;
     Ok(value)
 }
@@ -1405,6 +1417,44 @@ mod tests {
             store.consumer_configuration(&created.id).unwrap().name,
             "outside edit"
         );
+    }
+
+    /// Legacy recording switches remain readable without rewriting configuration or returning a UI field.
+    #[test]
+    fn legacy_recording_switch_is_ignored_without_manual_migration() {
+        use crate::schema::DescribeConfig;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let paths = paths(temporary.path());
+        let store = ApiStore::new(&paths);
+        store
+            .save_configuration(&ApiSettings::default(), ApiSettings::default())
+            .unwrap();
+        let path = paths.integrations_dir().join("api/configuration.json");
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        for previous in [false, true] {
+            document["data"]["record_support"] = serde_json::json!(previous);
+            let saved = serde_json::to_vec(&document).unwrap();
+            std::fs::write(&path, &saved).unwrap();
+            assert_eq!(store.configuration().unwrap(), ApiSettings::default());
+            assert_eq!(std::fs::read(&path).unwrap(), saved);
+        }
+        assert!(
+            ApiSettings::SCHEMA
+                .fields
+                .iter()
+                .all(|field| field.id != "record_support")
+        );
+        assert!(
+            serde_json::to_value(ApiSettings::default())
+                .unwrap()
+                .get("record_support")
+                .is_none()
+        );
+        document["data"]["unknown"] = serde_json::json!(true);
+        std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+        assert!(store.configuration().is_err());
     }
 
     /// Preserves a corrupt source document for explicit repair.

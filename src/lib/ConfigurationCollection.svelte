@@ -50,7 +50,33 @@
 	let error = $state('');
 	let credential = $state('');
 	let message = $state('');
+	let query = $state('');
+	const records = $derived(
+		snapshot?.records.filter((record) =>
+			record.title.toLowerCase().includes(query.toLowerCase())
+		) ?? []
+	);
 	let confirmation = $state<ConfigurationActionDescriptor | null>(null);
+	let actionDialog = $state<HTMLDialogElement>();
+	let credentialInput = $state<HTMLInputElement>();
+	$effect(() => {
+		if (credential && credentialInput && active) {
+			credentialInput.focus();
+			credentialInput.select();
+		}
+	});
+	const actionTitleId = $props.id();
+	$effect(() => {
+		if (!actionDialog) return;
+		const visible = active && Boolean(confirmation || credential);
+		if (visible && !actionDialog.open) {
+			if (typeof actionDialog.showModal === 'function') actionDialog.showModal();
+			else actionDialog.setAttribute('open', '');
+		} else if (!visible && actionDialog.open) {
+			if (typeof actionDialog.close === 'function') actionDialog.close();
+			else actionDialog.removeAttribute('open');
+		}
+	});
 	$effect(() => {
 		if (!active) {
 			credential = '';
@@ -152,12 +178,12 @@
 		busy = true;
 		error = '';
 		message = '';
-		confirmation = null;
 		try {
 			const result = await act(editing, action.id);
 			if (!mounted) return;
 			credential = result ?? '';
 			message = action.success_message;
+			confirmation = null;
 		} catch (cause) {
 			if (mounted)
 				error =
@@ -169,7 +195,7 @@
 		}
 	}
 
-	/** Ask for declared confirmation inline before running an irreversible record action. */
+	/** Ask for declared confirmation in the shared action dialog before running an irreversible record action. */
 	function requestAction(action: ConfigurationActionDescriptor) {
 		if (busy || credential) return;
 		if (action.confirmation) confirmation = action;
@@ -208,7 +234,7 @@
 				disabled={busy}>Add {itemLabel}</button
 			>{/if}
 	</header>
-	{#if error}<p role="alert">{error}</p>
+	{#if error && !confirmation}<p role="alert">{error}</p>
 		<button
 			onclick={() => {
 				error = '';
@@ -221,7 +247,14 @@
 			{#if !snapshot.records.length}<p class="empty">
 					No {title.toLowerCase()} yet. Add one to get started.
 				</p>{/if}
-			{#each snapshot.records as record (record.id)}
+			{#if snapshot.records.length > 5}<input
+					type="search"
+					aria-label={`Search ${title}`}
+					placeholder="Find an entry…"
+					bind:value={query}
+				/>{/if}
+			{#if snapshot.records.length && !records.length}<p class="empty">No matching entries.</p>{/if}
+			{#each records as record (record.id)}
 				<div class="record">
 					<strong>{record.title}</strong><button
 						disabled={busy || Boolean(credential)}
@@ -236,7 +269,6 @@
 					void submit();
 				}}
 			>
-				<h3>{editing ? `Edit ${itemLabel}` : `New ${itemLabel}`}</h3>
 				<ConfigurationFields
 					fields={snapshot.definition.schema.fields}
 					values={draft}
@@ -246,32 +278,20 @@
 					onChange={(value) => (draft = value)}
 				/>
 				{#if editing && act}
-					{#each snapshot.actions ?? [] as action (action.id)}
-						<div class="record-action">
-							<button
-								type="button"
-								disabled={busy || Boolean(credential)}
-								onclick={() => requestAction(action)}>{action.label}</button
-							>
-							{#if action.description}<p class="description">{action.description}</p>{/if}
-						</div>
-					{/each}
-					{#if confirmation}<div
-							class="confirmation"
-							role="group"
-							aria-label={`${confirmation.label} confirmation`}
-						>
-							<p>{confirmation.confirmation}</p>
-							<button type="button" disabled={busy} onclick={() => (confirmation = null)}
-								>Cancel action</button
-							>
-							<button
-								type="button"
-								disabled={busy}
-								onclick={() => confirmation && runAction(confirmation)}>{confirmation.label}</button
-							>
-						</div>{/if}
+					<div class="record-actions">
+						{#each snapshot.actions ?? [] as action (action.id)}
+							<div class="record-action">
+								<button
+									type="button"
+									disabled={busy || Boolean(credential)}
+									onclick={() => requestAction(action)}>{action.label}</button
+								>
+								{#if action.description}<p class="description">{action.description}</p>{/if}
+							</div>
+						{/each}
+					</div>
 				{/if}
+				{#if message && !credential}<p role="status" class="action-feedback">{message}</p>{/if}
 				<div class="actions">
 					<button
 						type="button"
@@ -285,26 +305,98 @@
 				</div>
 			</form>{/if}
 	{:else}<p>Loading settings…</p>{/if}
-	{#if message}<p role="status">{message}</p>{/if}
-	{#if credential}<div class="credential">
-			<h3>Copy your credential</h3>
+	<dialog
+		bind:this={actionDialog}
+		aria-labelledby={actionTitleId}
+		oncancel={(event) => {
+			event.preventDefault();
+			if (!busy) {
+				confirmation = null;
+				credential = '';
+			}
+		}}
+	>
+		{#if credential}
+			<h3 id={actionTitleId}>Copy your credential</h3>
 			<p>Keep this credential private. Copy it into your client before hiding it.</p>
+			{#if message}<p role="status">{message}</p>{/if}
 			<input
+				bind:this={credentialInput}
 				aria-label="New credential"
 				readonly
 				value={credential}
 				onclick={(event) => event.currentTarget.select()}
-			/><button onclick={() => (credential = '')}>Hide credential</button>
-		</div>{/if}
+			/>
+			<div class="dialog-actions">
+				<button type="button" onclick={() => (credential = '')}>Hide credential</button>
+			</div>
+		{:else if confirmation}
+			<h3 id={actionTitleId}>{confirmation.label}</h3>
+			<p>{confirmation.confirmation}</p>
+			{#if error}<p role="alert">{error}</p>{/if}
+			<div class="dialog-actions">
+				<button type="button" disabled={busy} onclick={() => (confirmation = null)}
+					>Cancel action</button
+				>
+				<button
+					class="primary"
+					type="button"
+					disabled={busy}
+					onclick={() => confirmation && runAction(confirmation)}
+					>{busy ? 'Working…' : confirmation.label}</button
+				>
+			</div>
+		{/if}
+	</dialog>
 </section>
 
 <style>
-	.record-action,
-	.confirmation {
-		margin-top: 16px;
+	dialog {
+		width: min(480px, calc(100vw - 48px));
+		padding: 24px;
+		border: 1px solid var(--border);
+		border-radius: 10px;
+		background: var(--side);
+		color: var(--text);
+		box-shadow: 0 20px 70px #0008;
 	}
+	dialog::backdrop {
+		background: #0009;
+	}
+	dialog h3 {
+		margin: 0 0 12px;
+	}
+	dialog p {
+		color: var(--muted);
+		line-height: 1.5;
+	}
+	.dialog-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 8px;
+		margin-top: 24px;
+	}
+	.action-feedback {
+		color: var(--muted);
+	}
+
+	.record-actions {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+		gap: 24px;
+		padding: 20px;
+		margin-top: 24px;
+		background: var(--side);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+	}
+	.record-action {
+		min-width: 0;
+	}
+
 	section {
-		max-width: 880px;
+		width: 100%;
+		min-width: 0;
 		margin-top: 24px;
 	}
 	h2,
@@ -337,10 +429,9 @@
 		background: var(--maroon);
 		border-color: var(--maroon);
 	}
-	form,
-	.credential {
-		padding: 16px;
-		background: var(--side);
+	form {
+		padding: 0;
+		background: transparent;
 		border: 0;
 		margin-top: 16px;
 		border-radius: 4px;
@@ -354,9 +445,12 @@
 	}
 	.record strong {
 		flex: 1;
+		min-width: 0;
+		overflow-wrap: anywhere;
 	}
 	.actions {
 		justify-content: flex-end;
+		margin-top: 24px;
 	}
 	button {
 		min-height: 32px;

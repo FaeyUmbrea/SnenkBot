@@ -11,6 +11,8 @@ const connections: ConnectionStatus[] = [
 		connection: 'main',
 		title: 'OBS Studio',
 		state: 'connected',
+		show_when_healthy: true,
+		state_label: 'Connected',
 		detail: 'Recording'
 	},
 	{
@@ -18,6 +20,8 @@ const connections: ConnectionStatus[] = [
 		connection: 'bot',
 		title: 'Twitch bot',
 		state: 'error',
+		show_when_healthy: true,
+		state_label: 'Connection error',
 		detail: 'Reconnect required'
 	}
 ];
@@ -80,7 +84,7 @@ describe('Home view', () => {
 		const view = render(HomeView, { props });
 		expect(view.getByText('OBS Studio')).toBeTruthy();
 		expect(view.getByText('Reconnect required')).toBeTruthy();
-		await fireEvent.click(view.getAllByRole('button', { name: /Configure/ })[1]);
+		await fireEvent.click(view.getAllByRole('button', { name: /Configure/ })[0]);
 		expect(props.onConfigure).toHaveBeenCalledWith(connections[1]);
 	});
 

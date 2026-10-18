@@ -38,6 +38,51 @@ struct HotkeyValues {
     is_live2d_item: bool,
 }
 
+/// Optional model selector for the generated VTube Studio trigger form.
+#[derive(Debug, Default, serde::Serialize, crate::ConfigSchema)]
+#[config(id = "vtube.model.filters", version = 1, title = "Model filters")]
+pub struct ModelFilters {
+    #[config(id = "model_id", label = "Model ID", introduced = 1)]
+    pub model_id: Option<String>,
+}
+
+/// Optional hotkey selectors owned by the VTube Studio event definition.
+#[derive(Debug, Default, serde::Serialize, crate::ConfigSchema)]
+#[config(id = "vtube.hotkey.filters", version = 1, title = "Hotkey filters")]
+pub struct HotkeyFilters {
+    #[config(id = "model_id", label = "Model ID", introduced = 1)]
+    pub model_id: Option<String>,
+    #[config(id = "hotkey_id", label = "Hotkey ID", introduced = 1)]
+    pub hotkey_id: Option<String>,
+    #[config(
+        id = "ignore_api",
+        label = "Ignore API-triggered hotkeys",
+        introduced = 1
+    )]
+    pub ignore_api: bool,
+}
+
+/// Returns the provider-owned filter schema for one supported event trigger.
+pub fn trigger_configuration(kind: &TriggerKind) -> Option<crate::schema::ConfigSchema> {
+    use crate::schema::DescribeConfig;
+    let title = trigger_title(kind)?;
+    let TriggerKind::IntegrationEvent { event, .. } = kind else {
+        return None;
+    };
+    let fields = if event == "hotkey.triggered" {
+        HotkeyFilters::SCHEMA.fields
+    } else {
+        ModelFilters::SCHEMA.fields
+    };
+    Some(crate::schema::ConfigSchema {
+        id: "vtube.trigger",
+        version: 1,
+        title,
+        fields,
+        outputs: &[],
+    })
+}
+
 pub fn trigger_title(kind: &TriggerKind) -> Option<&'static str> {
     let TriggerKind::IntegrationEvent {
         integration, event, ..

@@ -7,7 +7,7 @@ import type { ConfigurationSnapshot } from '../src/lib/contracts';
 const snapshot: ConfigurationSnapshot = {
 	session_id: 'synthetic-settings',
 	revision: 0,
-	module: 'emotes',
+	module: 'ffz',
 	schema: {
 		id: 'example.connection',
 		version: 1,
@@ -35,6 +35,7 @@ const snapshot: ConfigurationSnapshot = {
 		prerequisite_field: 'ready',
 		prerequisite_message: 'Save the connection before pairing.'
 	},
+	actions: [],
 	authorization_ready: false,
 	collection: {
 		id: 'example.cues',
@@ -105,4 +106,25 @@ it('renders pairing and collection names from a synthetic native settings snapsh
 	expect(
 		transport.mock.calls.filter(([command]) => command === 'configuration_collection_load')
 	).toHaveLength(1);
+});
+
+it('renders owner-declared tools inside the settings form and routes the selected action', async () => {
+	const onAction = vi.fn();
+	const action = {
+		id: 'example.test',
+		label: 'Try example…',
+		description: 'Test this output.',
+		confirmation: null,
+		success_message: ''
+	};
+	const view = render(SettingsView, {
+		snapshot: { ...snapshot, authorization: null, collection: null, actions: [action] },
+		client: createDesktopClient(vi.fn()),
+		onSave: vi.fn(),
+		onAction
+	});
+	const button = view.getByRole('button', { name: action.label });
+	expect(button.closest('form')).toBeTruthy();
+	await fireEvent.click(button);
+	expect(onAction).toHaveBeenCalledWith(action);
 });

@@ -88,6 +88,62 @@ struct ReplayBufferValues {
     path: String,
 }
 
+/// Optional OBS scene selectors for generated trigger forms.
+#[derive(Debug, Default, serde::Serialize, crate::ConfigSchema)]
+#[config(id = "obs.scene.filters", version = 1, title = "Scene filters")]
+pub struct SceneFilters {
+    #[config(id = "scene", label = "Scene name", introduced = 1)]
+    pub scene: Option<String>,
+    #[config(id = "scene_uuid", label = "Scene UUID", introduced = 1)]
+    pub scene_uuid: Option<String>,
+}
+
+/// Optional OBS input selectors for generated trigger forms.
+#[derive(Debug, Default, serde::Serialize, crate::ConfigSchema)]
+#[config(id = "obs.input.filters", version = 1, title = "Input filters")]
+pub struct InputFilters {
+    #[config(id = "input", label = "Input name", introduced = 1)]
+    pub input: Option<String>,
+    #[config(id = "input_uuid", label = "Input UUID", introduced = 1)]
+    pub input_uuid: Option<String>,
+}
+
+/// Optional scene-item selectors owned by the OBS event definition.
+#[derive(Debug, Default, serde::Serialize, crate::ConfigSchema)]
+#[config(id = "obs.item.filters", version = 1, title = "Scene item filters")]
+pub struct ItemFilters {
+    #[config(id = "scene", label = "Scene name", introduced = 1)]
+    pub scene: Option<String>,
+    #[config(id = "scene_uuid", label = "Scene UUID", introduced = 1)]
+    pub scene_uuid: Option<String>,
+    #[config(id = "item_id", label = "Item ID", introduced = 1)]
+    pub item_id: Option<u64>,
+}
+
+/// Describes supported OBS trigger filters using the existing configuration schema.
+pub fn trigger_configuration(kind: &TriggerKind) -> Option<crate::schema::ConfigSchema> {
+    use crate::schema::DescribeConfig;
+    let title = trigger_title(kind)?;
+    let fields = match kind {
+        TriggerKind::IntegrationEvent { event, .. } => match ObsEventKind::parse(event)? {
+            ObsEventKind::SceneItemEnabledChanged => ItemFilters::SCHEMA.fields,
+            ObsEventKind::ProgramSceneChanged | ObsEventKind::PreviewSceneChanged => {
+                SceneFilters::SCHEMA.fields
+            }
+            ObsEventKind::InputMuteChanged => InputFilters::SCHEMA.fields,
+            _ => &[],
+        },
+        _ => &[],
+    };
+    Some(crate::schema::ConfigSchema {
+        id: "obs.trigger",
+        version: 1,
+        title,
+        fields,
+        outputs: &[],
+    })
+}
+
 pub fn trigger_title(kind: &TriggerKind) -> Option<&'static str> {
     let event = match kind {
         TriggerKind::ObsRecordingStarted => ObsEventKind::RecordingStarted,

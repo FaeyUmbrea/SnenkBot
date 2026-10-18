@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { ConnectionStatus, ReconfigurationRequest } from './contracts/index';
 	import Icon from './Icon.svelte';
+	import { prioritizeConnections } from './connection-order';
 
 	let {
 		connections,
@@ -14,22 +15,27 @@
 	let open = $state(false);
 	let root: HTMLDetailsElement;
 	let summary: HTMLElement;
-	const connected = $derived(connections.filter((item) => item.state === 'connected').length);
+	const visible = $derived(
+		connections.filter(
+			(item) =>
+				item.show_when_healthy ||
+				item.state !== 'connected' ||
+				requests.some(
+					(request) =>
+						request.integration === item.integration && request.connection === item.connection
+				)
+		)
+	);
+	const connected = $derived(visible.filter((item) => item.state === 'connected').length);
 	const severity = $derived(
-		connections.some((item) => item.state === 'error')
+		visible.some((item) => item.state === 'error')
 			? 'error'
-			: connections.some((item) => item.state === 'connecting')
+			: visible.some((item) => item.state === 'connecting')
 				? 'connecting'
-				: connections.length > 0 && connected === connections.length
+				: visible.length > 0 && connected === visible.length
 					? 'connected'
 					: 'inactive'
 	);
-	const stateLabels = {
-		connected: 'Connected',
-		connecting: 'Connecting',
-		error: 'Connection error',
-		inactive: 'Inactive'
-	};
 
 	function close(restore = false) {
 		open = false;
@@ -56,10 +62,10 @@
 			event.preventDefault();
 			open = !root.open;
 		}}
-		aria-label={`Connections: ${connected} of ${connections.length} connected`}
+		aria-label={`Connections: ${connected} of ${visible.length} healthy`}
 	>
 		<span class="pip {severity}"></span>
-		<span>Connected {connected}/{connections.length}</span>
+		<span>Connections {connected}/{visible.length}</span>
 	</summary>
 	<div class="connection-popover" role="region" aria-label="Connection overview">
 		<div class="heading">
@@ -68,11 +74,11 @@
 				onclick={() => close(true)}><Icon name="close" size={16} /></button
 			>
 		</div>
-		{#if connections.length === 0}
-			<p>No connections configured yet.</p>
+		{#if visible.length === 0}
+			<p>No connections need attention.</p>
 		{:else}
 			<ul>
-				{#each connections as item (`${item.integration}:${item.connection}`)}
+				{#each prioritizeConnections(visible) as item (`${item.integration}:${item.connection}`)}
 					{@const matchingRequests = requests.filter(
 						(request) =>
 							request.integration === item.integration && request.connection === item.connection
@@ -81,7 +87,7 @@
 						<div class="connection-row">
 							<span class="pip {item.state}" aria-hidden="true"></span>
 							<strong>{item.title}</strong>
-							<span class="state-label">{stateLabels[item.state]}</span>
+							<span class="state-label">{item.state_label}</span>
 							<button
 								type="button"
 								class="configure"

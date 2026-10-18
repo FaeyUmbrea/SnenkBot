@@ -2,7 +2,6 @@
 	import DesktopShell from '../src/lib/DesktopShell.svelte';
 	import IntegrationOverview from '../src/lib/IntegrationOverview.svelte';
 	import ConfigurationView from '../src/lib/ConfigurationView.svelte';
-	import AuthorizationField from '../src/lib/AuthorizationField.svelte';
 	import type {
 		ConfigurationSnapshot,
 		CredentialPresence,
@@ -62,6 +61,7 @@
 			prerequisite_field: 'enabled',
 			prerequisite_message: 'Enable and save VTube Studio settings before authorizing.'
 		},
+		actions: [],
 		authorization_ready: true
 	});
 
@@ -71,6 +71,8 @@
 			connection: 'main',
 			title: 'VTube Studio',
 			state: 'connected',
+			show_when_healthy: true,
+			state_label: 'Connected',
 			detail: 'Actions and events connected'
 		}
 	];
@@ -98,7 +100,7 @@
 
 <DesktopShell
 	page="devices"
-	title="Devices & Tools"
+	title="VTube Studio"
 	{connections}
 	onNavigate={() => {}}
 	onConfigure={() => {}}
@@ -108,28 +110,24 @@
 		<IntegrationOverview integration="vtube_studio" {connections} {workflows} onOpen={() => {}}>
 			<ConfigurationView
 				{snapshot}
+				showTitle={false}
+				onAuthorizationPresence={async () => {
+					await wait();
+					return parameters.get('state') === 'error' ? 'unavailable' : presence;
+				}}
+				onAuthorize={async () => {
+					await wait();
+					presence = 'stored';
+				}}
+				onForgetAuthorization={async () => {
+					await wait();
+					presence = 'empty';
+				}}
 				onSave={async ({ values }) => {
 					snapshot = { ...snapshot, revision: snapshot.revision + 1, values };
 					return { snapshot, notices: [] };
 				}}
 			/>
-			{#if snapshot.authorization}<AuthorizationField
-					descriptor={snapshot.authorization}
-					ready={snapshot.authorization_ready}
-					contextKey={snapshot.session_id}
-					onPresence={async () => {
-						await wait();
-						return parameters.get('state') === 'error' ? 'unavailable' : presence;
-					}}
-					onAuthorize={async () => {
-						await wait();
-						presence = 'stored';
-					}}
-					onForget={async () => {
-						await wait();
-						presence = 'empty';
-					}}
-				/>{/if}
 		</IntegrationOverview>
 	</div>
 </DesktopShell>

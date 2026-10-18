@@ -256,6 +256,8 @@ describe('desktop update subscription', () => {
 				connection: 'main',
 				title: 'OBS',
 				state: 'connected',
+				show_when_healthy: true,
+				state_label: 'Connected',
 				detail: ''
 			}
 		];

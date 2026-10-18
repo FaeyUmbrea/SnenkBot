@@ -29,10 +29,15 @@ export const inventory: CollectionSnapshot = {
 			fields: [
 				field('name', 'Name', 'text'),
 				field('allowed_origins', 'Allowed browser origins', 'string_set'),
+				{
+					...field('static_folder', 'Static folder', 'directory'),
+					required: false,
+					description: 'Optional folder to serve. Save changes before copying its hosting URL.'
+				},
 				field('permissions', 'Permissions', {
 					object: [
-						field('channels', 'Data channels', 'string_set', 'api.channels'),
-						field('providers', 'Providers', 'string_set_map', 'api.provider_operations'),
+						field('channels', 'Events', 'string_set', 'api.channels'),
+						field('providers', 'Lookups', 'string_set_map', 'api.provider_operations'),
 						field('readable_secrets', 'Readable secret names', 'string_set'),
 						field('writable_secrets', 'Writable secret names', 'string_set')
 					]

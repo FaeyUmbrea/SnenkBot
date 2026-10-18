@@ -12,6 +12,8 @@
 		onImport: (value: unknown) => Promise<string>;
 	} = $props();
 	let busy = $state(false);
+	let dialog: HTMLDialogElement;
+	const titleId = $props.id();
 	let message = $state('');
 	let error = $state('');
 	/** Parse a user-selected JSON document within the integration's size limit. */
@@ -47,8 +49,15 @@
 	}
 </script>
 
-<details>
-	<summary>{label}</summary>
+<button type="button" onclick={() => dialog.showModal()}>{label}</button>
+<dialog
+	bind:this={dialog}
+	aria-labelledby={titleId}
+	oncancel={(event) => {
+		if (busy) event.preventDefault();
+	}}
+>
+	<h2 id={titleId}>{label}</h2>
 	<p>{description}</p>
 	<input
 		aria-label={label}
@@ -57,4 +66,44 @@
 		disabled={busy}
 		onchange={read}
 	/>{#if message}<p role="status">{message}</p>{/if}{#if error}<p role="alert">{error}</p>{/if}
-</details>
+	<footer>
+		<button type="button" disabled={busy} onclick={() => dialog.close()}>Close</button>
+	</footer>
+</dialog>
+
+<style>
+	button {
+		min-height: 32px;
+		padding: 6px 12px;
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		background: var(--surface);
+	}
+	dialog {
+		max-width: min(480px, calc(100vw - 32px));
+		padding: 24px;
+		background: var(--side);
+		color: var(--text);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+	}
+	dialog::backdrop {
+		background: #0009;
+	}
+	h2 {
+		margin: 0;
+		font-size: 18px;
+	}
+	p {
+		color: var(--muted);
+		line-height: 1.5;
+	}
+	footer {
+		display: flex;
+		justify-content: flex-end;
+		margin-top: 24px;
+	}
+	input {
+		width: 100%;
+	}
+</style>

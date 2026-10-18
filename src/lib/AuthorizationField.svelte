@@ -210,18 +210,20 @@
 		gap: 20px;
 		min-height: 72px;
 		margin-top: 24px;
-		padding: 12px 16px;
+		padding: 16px;
+		border: 1px solid var(--border);
+		border-radius: 8px;
 		background: var(--side);
 	}
 	.authorization-copy {
 		display: grid;
-		grid-template-columns: minmax(140px, 1fr) minmax(180px, 1fr);
+		grid-template-columns: 1fr;
 		align-items: center;
 		gap: 4px 16px;
 		flex: 1;
 	}
 	.authorization-copy strong {
-		font-weight: 400;
+		font-weight: 600;
 	}
 	.authorization-copy span {
 		color: var(--muted);

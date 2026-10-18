@@ -55,6 +55,7 @@
 		values: { enabled: true, host: '192.168.178.44', port: 4455, tls: false },
 		credential: null,
 		authorization: null,
+		actions: [],
 		authorization_ready: false,
 		collection: null
 	});
@@ -64,6 +65,8 @@
 			connection: 'main',
 			title: 'OBS Studio',
 			state: 'connected',
+			show_when_healthy: true,
+			state_label: 'Connected',
 			detail: 'Connected to 192.168.178.44:4455'
 		},
 		{
@@ -71,6 +74,8 @@
 			connection: 'broadcaster',
 			title: 'Twitch Broadcaster Account',
 			state: 'connected',
+			show_when_healthy: true,
+			state_label: 'Connected',
 			detail: 'Chat and channel events connected'
 		},
 		{
@@ -78,6 +83,8 @@
 			connection: 'bot',
 			title: 'Twitch Bot Account',
 			state: 'error',
+			show_when_healthy: true,
+			state_label: 'Connection error',
 			detail: 'Reconnect this account to send messages as the bot.'
 		}
 	];
@@ -86,7 +93,7 @@
 
 <DesktopShell
 	page="broadcast"
-	title="Broadcast Apps"
+	title="OBS Studio"
 	{connections}
 	onNavigate={noEffect}
 	onConfigure={noEffect}
@@ -95,6 +102,7 @@
 	<div class="configuration-content">
 		<ConfigurationView
 			{snapshot}
+			showTitle={false}
 			onRefreshCredential={async () =>
 				fixturePresence === 'unavailable'
 					? 'unavailable'

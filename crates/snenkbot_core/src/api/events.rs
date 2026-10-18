@@ -106,13 +106,12 @@ struct State {
     targeted: VecDeque<EventFrame>,
     targeted_pruned_until: BTreeMap<(String, String), u64>,
     demand: BTreeMap<String, usize>,
-    record_support: bool,
     support_retention: usize,
     broadcaster_id: Option<String>,
     history_load_fault: bool,
 }
 
-/// Holds only demanded live channels and explicitly recorded support events.
+/// Holds demanded live channels and automatically recorded support events.
 pub struct EventHub {
     state: Mutex<State>,
     sender: broadcast::Sender<EventFrame>,
@@ -129,9 +128,9 @@ pub struct EventHub {
 
 impl EventHub {
     /// Creates an empty epoch with bounded replay history.
-    pub fn new(paths: &AppPaths, record_support: bool, support_retention: usize) -> Arc<Self> {
+    pub fn new(paths: &AppPaths, support_retention: usize) -> Arc<Self> {
         let (sender, _) = broadcast::channel(LIVE_LIMIT);
-        let (demand, _) = watch::channel(BTreeSet::new());
+        let (demand, _) = watch::channel(BTreeSet::from(["twitch.support".into()]));
         let (demand_revision, _) = watch::channel(0);
         let (history_tx, history_rx) = mpsc::channel(256);
         let (history_unavailable, _) = watch::channel(false);
@@ -144,7 +143,6 @@ impl EventHub {
                 targeted: VecDeque::new(),
                 targeted_pruned_until: BTreeMap::new(),
                 demand: BTreeMap::new(),
-                record_support,
                 support_retention,
                 broadcaster_id: None,
                 history_load_fault: false,
@@ -509,10 +507,9 @@ impl EventHub {
         self.demand_revision.send_replace(next);
     }
 
-    /// Changes standing support recording demand and retention.
-    pub fn configure(&self, record_support: bool, support_retention: usize) {
+    /// Changes the retention bound for automatically recorded support events.
+    pub fn configure(&self, support_retention: usize) {
         let mut state = self.state.lock().expect("overlay event lock poisoned");
-        state.record_support = record_support;
         let retention_changed = state.support_retention != support_retention;
         state.support_retention = support_retention;
         if let Some(support) = state.channels.get_mut("twitch.support") {
@@ -901,13 +898,10 @@ impl EventHub {
         recipient: Option<&str>,
     ) -> Result<(), ApiError> {
         let mut state = self.state.lock().expect("overlay event lock poisoned");
-        if !force
-            && !state.demand.contains_key(channel)
-            && !(channel == "twitch.support" && state.record_support)
-        {
+        if !force && !state.demand.contains_key(channel) && channel != "twitch.support" {
             return Ok(());
         }
-        if persist_support && channel == "twitch.support" && state.record_support {
+        if persist_support && channel == "twitch.support" {
             let broadcaster_id = data
                 .get("channelId")
                 .and_then(Value::as_str)
@@ -1027,12 +1021,10 @@ fn parse_cursor(cursor: &str, epoch: &str) -> Option<u64> {
         .and_then(|(prefix, sequence)| (prefix == epoch).then(|| sequence.parse().ok()).flatten())
 }
 
-/// Combines active clients with explicitly enabled support recording.
+/// Keeps support subscriptions active alongside channels requested by API clients.
 fn demand_set(state: &State) -> BTreeSet<String> {
     let mut channels: BTreeSet<String> = state.demand.keys().cloned().collect();
-    if state.record_support {
-        channels.insert("twitch.support".into());
-    }
+    channels.insert("twitch.support".into());
     channels
 }
 
@@ -1142,7 +1134,7 @@ mod tests {
     #[test]
     fn synthetic_events_do_not_change_shared_channel_or_support_state() {
         let temporary = tempfile::tempdir().unwrap();
-        let hub = EventHub::new(&paths(temporary.path()), true, 500);
+        let hub = EventHub::new(&paths(temporary.path()), 500);
         hub.set_broadcaster("100").unwrap();
         let epoch = hub.state.lock().unwrap().epoch.clone();
         let consumers = BTreeSet::from(["alice".into()]);
@@ -1199,7 +1191,7 @@ mod tests {
     async fn cheer_recording_survives_restart_and_resets_on_account_change() {
         let temporary = tempfile::tempdir().unwrap();
         let paths = paths(temporary.path());
-        let hub = EventHub::new(&paths, true, 500);
+        let hub = EventHub::new(&paths, 500);
         hub.set_broadcaster("100").unwrap();
         let shutdown = CancellationToken::new();
         let writer = tokio::spawn({
@@ -1210,7 +1202,7 @@ mod tests {
         hub.publish_twitch(&TwitchEvent::Cheer(json!({"broadcaster_user_id":"100","user_name":"Viewer","bits":100,"message":"yay"})), &json!({"metadata":{"message_id":"one","message_timestamp":"2026-10-18T08:00:00Z"}})).unwrap();
         shutdown.cancel();
         writer.await.unwrap().unwrap();
-        let restarted = EventHub::new(&paths, false, 500);
+        let restarted = EventHub::new(&paths, 500);
         restarted.set_broadcaster("100").unwrap();
         let channels = BTreeSet::from(["twitch.support".to_owned()]);
         let snapshot = restarted.subscribe(channels.clone(), BTreeMap::new());
@@ -1233,7 +1225,7 @@ mod tests {
     #[test]
     fn support_uses_authoritative_events_and_omits_gift_deliveries() {
         let temporary = tempfile::tempdir().unwrap();
-        let hub = EventHub::new(&paths(temporary.path()), false, 500);
+        let hub = EventHub::new(&paths(temporary.path()), 500);
         hub.set_broadcaster("100").unwrap();
         let channels = BTreeSet::from(["twitch.support".to_owned()]);
         let _subscription = hub.subscribe(channels.clone(), BTreeMap::new());
@@ -1261,7 +1253,7 @@ mod tests {
     #[test]
     fn replayed_support_is_transient_and_uses_unique_delivery_ids() {
         let temporary = tempfile::tempdir().unwrap();
-        let hub = EventHub::new(&paths(temporary.path()), true, 500);
+        let hub = EventHub::new(&paths(temporary.path()), 500);
         let event = TwitchEvent::Cheer(
             json!({"broadcaster_user_id":"100","user_name":"Viewer","bits":100}),
         );
@@ -1293,7 +1285,7 @@ mod tests {
     #[test]
     fn targeted_replay_is_isolated_and_reconnects_in_cursor_order() {
         let temporary = tempfile::tempdir().unwrap();
-        let hub = EventHub::new(&paths(temporary.path()), false, 500);
+        let hub = EventHub::new(&paths(temporary.path()), 500);
         hub.set_broadcaster("100").unwrap();
         let channels = BTreeSet::from(["twitch.support".to_owned()]);
         let mut alice =
@@ -1367,7 +1359,7 @@ mod tests {
     #[test]
     fn targeted_channel_snapshot_uses_latest_visible_state() {
         let temporary = tempfile::tempdir().unwrap();
-        let hub = EventHub::new(&paths(temporary.path()), false, 500);
+        let hub = EventHub::new(&paths(temporary.path()), 500);
         hub.set_broadcaster("100").unwrap();
         let channels = BTreeSet::from(["twitch.channel".to_owned()]);
         let _demand = hub.subscribe_for_consumer(Some("alice"), channels.clone(), BTreeMap::new());
@@ -1421,7 +1413,7 @@ mod tests {
     #[test]
     fn private_queue_eviction_is_scoped_to_recipient() {
         let temporary = tempfile::tempdir().unwrap();
-        let hub = EventHub::new(&paths(temporary.path()), false, 500);
+        let hub = EventHub::new(&paths(temporary.path()), 500);
         hub.set_broadcaster("100").unwrap();
         let channels = BTreeSet::from(["twitch.support".to_owned()]);
         let bob_cursor = hub
@@ -1457,7 +1449,7 @@ mod tests {
     #[test]
     fn chat_uses_native_emotes_and_safe_color_fallback() {
         let temporary = tempfile::tempdir().unwrap();
-        let hub = EventHub::new(&paths(temporary.path()), false, 500);
+        let hub = EventHub::new(&paths(temporary.path()), 500);
         hub.set_broadcaster("100").unwrap();
         let channels = BTreeSet::from(["twitch.chat".to_owned()]);
         let _subscription = hub.subscribe(channels.clone(), BTreeMap::new());
@@ -1491,7 +1483,7 @@ mod tests {
     fn legacy_import_validates_before_writing_and_keeps_broadcasters_separate() {
         let temporary = tempfile::tempdir().unwrap();
         let paths = paths(temporary.path());
-        let hub = EventHub::new(&paths, false, 500);
+        let hub = EventHub::new(&paths, 500);
         let valid = json!({"id":"one","channelId":"100","kind":"gift","user":"Gifter","timestamp":"2026-10-18T08:00:00Z","amount":5});
         let invalid = json!({"id":"two","channelId":"../other","kind":"gift","user":"Gifter","timestamp":"2026-10-18T08:00:00Z"});
         assert!(
@@ -1526,7 +1518,7 @@ mod tests {
     fn corrupt_next_account_history_clears_previous_snapshot() {
         let temporary = tempfile::tempdir().unwrap();
         let paths = paths(temporary.path());
-        let hub = EventHub::new(&paths, false, 500);
+        let hub = EventHub::new(&paths, 500);
         let event = json!({"id":"one","channelId":"100","kind":"sub","user":"Viewer","timestamp":"2026-10-18T08:00:00Z"});
         hub.import_support_history(vec![event]).unwrap();
         hub.set_broadcaster("100").unwrap();
@@ -1546,7 +1538,7 @@ mod tests {
     #[test]
     fn older_import_does_not_evict_newer_recorded_support() {
         let temporary = tempfile::tempdir().unwrap();
-        let hub = EventHub::new(&paths(temporary.path()), false, 1);
+        let hub = EventHub::new(&paths(temporary.path()), 1);
         let newer = json!({"id":"new","channelId":"100","kind":"bits","user":"Viewer","timestamp":"2026-10-18T08:00:00Z","amount":100});
         let older = json!({"id":"old","channelId":"100","kind":"sub","user":"Viewer","timestamp":"2025-10-18T08:00:00Z"});
         hub.import_support_history(vec![newer]).unwrap();
@@ -1560,7 +1552,7 @@ mod tests {
     #[test]
     fn stale_import_completion_cannot_reset_a_new_broadcaster() {
         let temporary = tempfile::tempdir().unwrap();
-        let hub = EventHub::new(&paths(temporary.path()), false, 500);
+        let hub = EventHub::new(&paths(temporary.path()), 500);
         hub.set_broadcaster("100").unwrap();
         hub.set_broadcaster("200").unwrap();
         hub.reset_active_support_after_import("100", vec![json!({"id":"old","channelId":"100","kind":"sub","user":"Viewer","timestamp":"2025-10-18T08:00:00Z"})]);

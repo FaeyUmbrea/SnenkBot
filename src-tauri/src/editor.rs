@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -18,6 +18,7 @@ pub struct EditorSnapshot {
     #[specta(type = specta_typescript::Number)]
     pub revision: u64,
     pub draft: WorkflowDefinition,
+    pub trigger_schemas: BTreeMap<String, ConfigSchema>,
     pub dirty: bool,
     pub can_undo: bool,
     pub can_redo: bool,
@@ -134,6 +135,16 @@ impl Session {
             session_id: session_id.to_owned(),
             revision: self.revision,
             draft: self.editor.draft().clone(),
+            trigger_schemas: self
+                .editor
+                .draft()
+                .triggers
+                .iter()
+                .filter_map(|trigger| {
+                    snenk_bot::workflows::trigger_configuration(&trigger.kind)
+                        .map(|schema| (trigger.id.clone(), schema))
+                })
+                .collect(),
             dirty: self.editor.is_dirty(),
             can_undo: self.editor.can_undo(),
             can_redo: self.editor.can_redo(),

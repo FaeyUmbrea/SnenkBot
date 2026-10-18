@@ -6,6 +6,7 @@ pub mod choices;
 pub mod editor;
 pub mod engine;
 pub mod event_history;
+pub mod event_testing;
 pub mod execution;
 pub mod history;
 pub mod integration;

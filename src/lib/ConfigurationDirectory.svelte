@@ -42,7 +42,7 @@
 
 <style>
 	section {
-		max-width: 880px;
+		width: 100%;
 	}
 	header {
 		margin-bottom: 16px;
@@ -77,11 +77,11 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: 24px;
-		padding: 20px 0;
+		padding: 16px;
 		text-align: left;
 		border: 0;
-		border-bottom: 1px solid var(--border);
-		background: transparent;
+		margin-bottom: 8px;
+		background: var(--side);
 	}
 	.entry:hover {
 		background: var(--side);

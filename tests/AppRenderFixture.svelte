@@ -51,6 +51,7 @@
 	};
 	let editor: EditorSnapshot_Serialize = {
 		session_id: 'editor',
+		trigger_schemas: {},
 		revision: 0,
 		draft: {
 			name: title,
@@ -120,6 +121,7 @@
 		},
 		credential: null,
 		authorization: null,
+		actions: [],
 		authorization_ready: false,
 		collection: null
 	};
@@ -166,53 +168,127 @@
 			}
 		],
 		openEditor: async () => editor,
-		openConfiguration: async ({ module }) =>
-			module === 'api'
+		openConfiguration: async ({ module, record_id }) =>
+			record_id
 				? {
 						...configuration,
 						module: 'api',
-						session_id: 'api-fixture',
-						collection: {
-							id: 'api.consumers',
-							title: 'Consumers',
-							item_label: 'consumer',
-							description: 'Manage the overlays and applications that can access SnenkBot.'
-						},
+						session_id: 'consumer-fixture',
+						schema: inventory.definition.schema,
+						defaults: inventory.definition.defaults,
+						values: {
+							...inventory.definition.defaults,
+							name: 'Main stream overlay',
+							allowed_origins: ['http://absolute'],
+							permissions: {
+								channels: ['twitch.chat'],
+								providers: { pronouns: ['resolve'] },
+								readable_secrets: [],
+								writable_secrets: []
+							}
+						}
+					}
+				: module === 'api'
+					? {
+							...configuration,
+							module: 'api',
+							session_id: 'api-fixture',
+							collection: {
+								id: 'api.consumers',
+								title: 'Consumers',
+								item_label: 'consumer',
+								description: 'Manage the overlays and applications that can access SnenkBot.'
+							},
+							schema: {
+								...configuration.schema,
+								id: 'snenkbot.api.settings',
+								title: 'API server',
+								fields: [
+									...configuration.schema.fields.filter((field) => field.id !== 'tls'),
+									{
+										...configuration.schema.fields[2],
+										id: 'support_retention',
+										label: 'Support history size'
+									}
+								]
+							},
+							defaults: {
+								enabled: false,
+								host: '127.0.0.1',
+								port: 38764,
+								support_retention: 500
+							},
+							values: {
+								enabled: false,
+								host: '127.0.0.1',
+								port: 38764,
+								support_retention: 500
+							}
+						}
+					: configuration,
+		collectionLoad: async () => ({
+			...inventory,
+			actions: [
+				{
+					id: 'api.copy_hosting_url',
+					label: 'Copy hosting URL',
+					description: 'Copy the saved hosting address for OBS.',
+					confirmation: null,
+					success_message: 'Hosting URL copied.'
+				},
+				{
+					id: 'api.regenerate_token',
+					label: 'Regenerate token',
+					description: 'Replace a lost token while keeping settings and permissions.',
+					confirmation:
+						'The old token and hosting URL will stop working. Settings and permissions will stay intact.',
+					success_message: 'Token regenerated.'
+				}
+			],
+			records: [{ id: 'main', title: 'Main stream overlay', values: {} }]
+		}),
+		collectionAction: async ({ action_id }) =>
+			action_id === 'api.regenerate_token' ? 'fictional-test-token' : null,
+		eventsList: async () => ({ events: [], errors: [] }),
+		eventTestOptions: async () => ({
+			consumers: [{ id: 'main', name: 'Main stream overlay', channels: ['custom'] }],
+			senders: [
+				{
+					channel: 'custom',
+					target_field: 'consumers',
+					definition: {
 						schema: {
-							...configuration.schema,
-							id: 'snenkbot.api.settings',
-							title: 'API server',
+							id: 'api.custom_event',
+							version: 1,
+							title: 'Custom event',
+							outputs: [],
 							fields: [
-								...configuration.schema.fields.filter((field) => field.id !== 'tls'),
 								{
-									...configuration.schema.fields[0],
-									id: 'record_support',
-									label: 'Record support events'
+									id: 'name',
+									label: 'Event name',
+									description: '',
+									introduced_in: 1,
+									kind: 'text',
+									required: true,
+									choice_source: null
 								},
 								{
-									...configuration.schema.fields[2],
-									id: 'support_retention',
-									label: 'Support history size'
+									id: 'payload',
+									label: 'Payload',
+									description: '',
+									introduced_in: 1,
+									kind: 'json',
+									required: true,
+									choice_source: null
 								}
 							]
 						},
-						defaults: {
-							enabled: false,
-							host: '127.0.0.1',
-							port: 38764,
-							record_support: false,
-							support_retention: 500
-						},
-						values: {
-							enabled: false,
-							host: '127.0.0.1',
-							port: 38764,
-							record_support: false,
-							support_retention: 500
-						}
+						defaults: { name: 'overlay.example', payload: { message: 'Hello overlay' } }
 					}
-				: configuration,
-		collectionLoad: async () => inventory,
+				}
+			]
+		}),
+		eventTestSend: async () => undefined,
 		configurationCredentialStatus: async () => 'empty' as const,
 		closeEditor: async () => undefined,
 		closeConfiguration: async () => undefined,

@@ -6,6 +6,7 @@
 	import { createConfigurationCollection } from './configuration-collection';
 	import type { createDesktopClient } from './desktop';
 	import type {
+		ConfigurationActionDescriptor,
 		ConfigurationSnapshot,
 		ConfigurationSaveResult,
 		SaveConfiguration
@@ -17,7 +18,9 @@
 		onSave,
 		onBack,
 		backLabel = 'Back',
-		active = true
+		active = true,
+		showTitle = true,
+		onAction
 	}: {
 		snapshot: ConfigurationSnapshot;
 		client: ReturnType<typeof createDesktopClient>;
@@ -25,6 +28,8 @@
 		onBack?: () => void;
 		backLabel?: string;
 		active?: boolean;
+		showTitle?: boolean;
+		onAction?: (action: ConfigurationActionDescriptor) => void;
 	} = $props();
 	const records = untrack(() =>
 		snapshot.collection ? createConfigurationCollection(client, snapshot) : null
@@ -52,6 +57,7 @@
 <div hidden={section !== 'settings'}>
 	<ConfigurationView
 		{snapshot}
+		{showTitle}
 		{onSave}
 		{onBack}
 		{backLabel}
@@ -99,7 +105,20 @@
 						authorization_id: authorization.id
 					})
 			: undefined}
-	/>
+	>
+		{#snippet actions()}
+			{#if onAction}
+				{#each snapshot.actions as action (action.id)}
+					<button
+						type="button"
+						class="field-button"
+						title={action.description}
+						onclick={() => onAction?.(action)}>{action.label}</button
+					>
+				{/each}
+			{/if}
+		{/snippet}
+	</ConfigurationView>
 </div>
 {#if recordsOpened && records && snapshot.collection}
 	<div hidden={section !== 'records'}>

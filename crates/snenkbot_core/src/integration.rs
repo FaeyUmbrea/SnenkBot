@@ -61,6 +61,7 @@ pub enum ConnectionState {
     Error,
 }
 
+/// A visible status row published by its integration with domain-specific wording.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 #[cfg_attr(feature = "desktop-contracts", derive(specta::Type))]
 pub struct ConnectionStatus {
@@ -68,6 +69,9 @@ pub struct ConnectionStatus {
     pub connection: String,
     pub title: String,
     pub state: ConnectionState,
+    pub state_label: String,
+    /// Keep healthy rows in the global connection menu; unhealthy rows always appear.
+    pub show_when_healthy: bool,
     pub detail: String,
 }
 
@@ -75,6 +79,8 @@ pub struct ConnectionStatus {
 /// Modules keep publishing a request until the required setup is satisfied.
 pub trait ConfigurationStatus: Send + Sync {
     fn reconfiguration_requests(&self) -> Vec<ReconfigurationRequest>;
+    /// Returns only statuses this integration chooses to show for its current configuration.
+    /// Each row owns its presentation label; the health state controls semantic indicators.
     fn connection_statuses(&self) -> Vec<ConnectionStatus>;
     fn subscribe_configuration_changes(&self) -> Vec<watch::Receiver<u64>>;
 }

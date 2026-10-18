@@ -471,6 +471,7 @@ pub struct Engine {
     workflows: RwLock<HashMap<String, Arc<Workflow>>>,
     capabilities: HashMap<(String, u32), Arc<dyn Capability>>,
     action_schemas: BTreeMap<(String, u32), &'static ConfigSchema>,
+    event_tests: crate::event_testing::EventTestCatalog,
     action_definitions: BTreeMap<(String, u32), crate::schema::ActionDefinition>,
     lua_bindings: BTreeMap<String, Arc<dyn Capability>>,
     input: Arc<dyn InputProvider>,
@@ -634,6 +635,7 @@ impl Engine {
             capabilities: HashMap::new(),
             action_schemas: BTreeMap::new(),
             action_definitions: BTreeMap::new(),
+            event_tests: crate::event_testing::EventTestCatalog::default(),
             lua_bindings: BTreeMap::new(),
             input,
             form_validators: FormValidators::default(),
@@ -697,6 +699,30 @@ impl Engine {
         self.register_lua_action(schema, capability);
         self.action_definitions
             .insert((schema.id.to_owned(), schema.version), definition);
+    }
+
+    /// Registers an output-only test sender alongside its ordinary action definition.
+    pub fn register_event_test_action(
+        &mut self,
+        definition: crate::schema::ActionDefinition,
+        target_field: &str,
+        channel: &str,
+        capability: Arc<dyn Capability>,
+    ) {
+        self.event_tests.register(
+            crate::event_testing::EventTestSender {
+                definition: definition.clone(),
+                target_field: target_field.into(),
+                channel: channel.into(),
+            },
+            Arc::clone(&capability),
+        );
+        self.register_lua_action_definition(definition, capability);
+    }
+
+    /// Shares explicitly eligible senders without exposing other workflow capabilities.
+    pub fn event_tests(&self) -> crate::event_testing::EventTestCatalog {
+        self.event_tests.clone()
     }
 
     pub fn action_definitions(&self) -> Vec<crate::schema::ActionDefinition> {

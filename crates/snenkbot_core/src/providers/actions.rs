@@ -79,6 +79,34 @@ struct EmotesInputs {
     channel_id: String,
 }
 
+/// Twitch channel whose FrankerFaceZ emotes should be resolved.
+#[derive(Default, Deserialize, Serialize, ConfigSchema)]
+#[serde(deny_unknown_fields)]
+#[config(
+    id = "ffz.resolve",
+    version = 1,
+    title = "Resolve FrankerFaceZ emotes",
+    output("emotes", "Emotes", "json")
+)]
+struct FfzInputs {
+    #[config(id = "channel_id", label = "Twitch channel ID", introduced = 1)]
+    channel_id: String,
+}
+
+/// Twitch channel whose BetterTTV emotes should be resolved.
+#[derive(Default, Deserialize, Serialize, ConfigSchema)]
+#[serde(deny_unknown_fields)]
+#[config(
+    id = "bttv.resolve",
+    version = 1,
+    title = "Resolve BetterTTV emotes",
+    output("emotes", "Emotes", "json")
+)]
+struct BttvInputs {
+    #[config(id = "channel_id", label = "Twitch channel ID", introduced = 1)]
+    channel_id: String,
+}
+
 /// Twitch login whose public pronouns should be resolved.
 #[derive(Default, Deserialize, Serialize, ConfigSchema)]
 #[serde(deny_unknown_fields)]
@@ -100,6 +128,8 @@ enum Action {
     Icons,
     ResolveIcon,
     Emotes,
+    Ffz,
+    Bttv,
     Pronouns,
 }
 
@@ -109,6 +139,8 @@ impl Action {
         match self {
             Self::Search | Self::Icons | Self::ResolveIcon => "steamgriddb",
             Self::Emotes => "emotes",
+            Self::Ffz => "ffz",
+            Self::Bttv => "bttv",
             Self::Pronouns => "pronouns",
         }
     }
@@ -118,7 +150,7 @@ impl Action {
         match self {
             Self::Search => "search",
             Self::Icons => "icons",
-            Self::ResolveIcon | Self::Emotes | Self::Pronouns => "resolve",
+            Self::ResolveIcon | Self::Emotes | Self::Ffz | Self::Bttv | Self::Pronouns => "resolve",
         }
     }
 
@@ -129,18 +161,22 @@ impl Action {
             Self::Icons => IconsInputs::SCHEMA,
             Self::ResolveIcon => ResolveInputs::SCHEMA,
             Self::Emotes => EmotesInputs::SCHEMA,
+            Self::Ffz => FfzInputs::SCHEMA,
+            Self::Bttv => BttvInputs::SCHEMA,
             Self::Pronouns => PronounsInputs::SCHEMA,
         }
     }
 }
 
 /// Keeps action metadata and provider operation metadata in one declaration list.
-fn definitions() -> [(ActionDefinition, Action); 5] {
+fn definitions() -> [(ActionDefinition, Action); 7] {
     [
         (ActionDefinition::of::<SearchInputs>(), Action::Search),
         (ActionDefinition::of::<IconsInputs>(), Action::Icons),
         (ActionDefinition::of::<ResolveInputs>(), Action::ResolveIcon),
         (ActionDefinition::of::<EmotesInputs>(), Action::Emotes),
+        (ActionDefinition::of::<FfzInputs>(), Action::Ffz),
+        (ActionDefinition::of::<BttvInputs>(), Action::Bttv),
         (ActionDefinition::of::<PronounsInputs>(), Action::Pronouns),
     ]
 }
@@ -148,10 +184,10 @@ fn definitions() -> [(ActionDefinition, Action); 5] {
 /// Builds the public provider catalog from the registered action definitions.
 pub(super) fn catalog() -> Vec<ProviderDescriptor> {
     let definitions = definitions();
-    ProviderId::ALL
+    let mut catalog: Vec<_> = ProviderId::ALL
         .into_iter()
         .map(|configuration| ProviderDescriptor {
-            configuration,
+            configuration: Some(configuration),
             id: configuration.document_id(),
             title: configuration.title(),
             operations: definitions
@@ -164,7 +200,22 @@ pub(super) fn catalog() -> Vec<ProviderDescriptor> {
                 })
                 .collect(),
         })
-        .collect()
+        .collect();
+    catalog.push(ProviderDescriptor {
+        configuration: None,
+        id: "emotes",
+        title: "Enabled FFZ and BTTV emotes",
+        operations: definitions
+            .iter()
+            .filter(|(_, action)| action.provider() == "emotes")
+            .map(|(definition, action)| ProviderOperation {
+                id: action.operation(),
+                title: definition.schema.title,
+                action: definition.schema.id,
+            })
+            .collect(),
+    });
+    catalog
 }
 
 /// Registers provider actions in workflows and the Lua native binding table.
@@ -230,7 +281,7 @@ impl Capability for ProviderAction {
                         json!({"name": config.name, "gameId": config.game_id}),
                     )
                 }
-                Action::Emotes => {
+                Action::Emotes | Action::Ffz | Action::Bttv => {
                     let config: EmotesInputs = parse(inputs)?;
                     ("resolve", json!({"channelId": config.channel_id}))
                 }
@@ -255,7 +306,9 @@ impl Capability for ProviderAction {
                         .filter(|(_, value)| !value.is_null())
                         .collect()
                 }
-                Action::Emotes => Values::from([("emotes".into(), result)]),
+                Action::Emotes | Action::Ffz | Action::Bttv => {
+                    Values::from([("emotes".into(), result)])
+                }
                 Action::Pronouns => {
                     let label = result
                         .get("pronouns")

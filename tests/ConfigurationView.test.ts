@@ -58,6 +58,7 @@ const snapshot: ConfigurationSnapshot = {
 	values: { host: '', port: 4455, enabled: false, password: '' },
 	credential: null,
 	authorization: null,
+	actions: [],
 	authorization_ready: false,
 	collection: null
 };

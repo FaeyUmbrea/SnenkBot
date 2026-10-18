@@ -28,7 +28,7 @@ pub struct CreateApiConsumer {
     #[config(
         id = "allowed_origins",
         label = "Allowed browser origins",
-        description = "For OBS Local file sources, add http://absolute. For files opened directly in a browser, add null. For hosted pages, add the exact address, such as http://localhost:47831, with no page path. All browser clients still need this consumer’s token. Leave empty for non-browser clients.",
+        description = "Local files, OBS local sources and pages hosted by SnenkBot work automatically. Add only other websites here, such as http://localhost:47831, with no page path. Every client still needs this consumer’s token.",
         introduced = 1
     )]
     pub allowed_origins: BTreeSet<String>,

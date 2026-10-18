@@ -418,6 +418,22 @@ fn validate_workflow_config(stored: &StoredConfig) -> Result<(), String> {
     decode(stored).map(|_| ())
 }
 
+/// Returns owner-supplied trigger copy and fields for the existing desktop form renderer.
+pub fn trigger_configuration(kind: &TriggerKind) -> Option<crate::schema::ConfigSchema> {
+    if matches!(kind, TriggerKind::Manual) {
+        return Some(crate::schema::ConfigSchema {
+            id: "manual",
+            version: 1,
+            title: "Manual run",
+            fields: &[],
+            outputs: &[],
+        });
+    }
+    crate::obs::trigger_configuration(kind)
+        .or_else(|| crate::twitch::events::trigger_configuration(kind))
+        .or_else(|| crate::vtube::trigger_configuration(kind))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;

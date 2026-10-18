@@ -3,6 +3,7 @@
 	import type { Snippet } from 'svelte';
 	import type { ConnectionStatus, WorkflowStatus } from './contracts/index';
 	import './theme.css';
+	import { prioritizeConnections } from './connection-order';
 
 	let {
 		integration,
@@ -21,7 +22,7 @@
 	let page = $state(0);
 	let observedIntegration = untrack(() => integration);
 	const matchingConnections = $derived(
-		connections.filter((item) => item.integration === integration)
+		prioritizeConnections(connections.filter((item) => item.integration === integration))
 	);
 	const references = $derived(
 		workflows.filter((workflow) => (workflow.integration_usage[integration]?.length ?? 0) > 0)
@@ -44,13 +45,6 @@
 		if (workflow.error !== null) return 'Unavailable';
 		return workflow.enabled ? 'Enabled' : 'Disabled';
 	}
-
-	const connectionLabels = {
-		inactive: 'Inactive',
-		connecting: 'Connecting',
-		connected: 'Connected',
-		error: 'Connection error'
-	};
 </script>
 
 <section class="workflow-editor integration-overview" aria-label="Integration overview">
@@ -69,7 +63,7 @@
 						></span>
 						<div class="connection-copy">
 							<strong>{connection.title}</strong>
-							<span class="state-label">{connectionLabels[connection.state]}</span>
+							<span class="state-label">{connection.state_label}</span>
 							{#if connection.state !== 'connected' && connection.detail}<span class="detail"
 									>{connection.detail}</span
 								>{/if}
@@ -146,12 +140,14 @@
 		border-bottom: 1px solid var(--border);
 	}
 	.connection-row {
+		border-radius: 6px;
 		display: flex;
-		align-items: flex-start;
+		align-items: center;
 		gap: 10px;
 	}
 	.connection-copy {
 		min-width: 0;
+		line-height: 1.5;
 		display: flex;
 		align-items: baseline;
 		flex-wrap: wrap;
@@ -179,7 +175,7 @@
 	.pip {
 		width: 8px;
 		height: 8px;
-		margin-top: 5px;
+		margin-top: 0;
 		border-radius: 50%;
 		background: var(--muted);
 		flex: none;

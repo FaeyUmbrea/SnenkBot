@@ -15,9 +15,11 @@ use super::{credentials::ObsCredentialStore, settings::ObsSettings};
 
 #[derive(Debug, Error)]
 pub(super) enum EventStreamError {
+    #[error("Cannot reach OBS. Check that OBS and its WebSocket server are running.")]
+    Unavailable,
     #[error("OBS event connection was lost")]
     Disconnected,
-    #[error("OBS rejected the event connection")]
+    #[error("OBS rejected authentication. Check the WebSocket password.")]
     Rejected,
     #[error(
         "OBS event session was invalidated; change OBS connection settings before reconnecting"
@@ -31,7 +33,7 @@ pub(super) enum EventStreamError {
 
 impl EventStreamError {
     pub(super) fn requires_configuration(&self) -> bool {
-        !matches!(self, Self::Disconnected)
+        !matches!(self, Self::Unavailable | Self::Disconnected)
     }
 }
 
@@ -51,7 +53,7 @@ impl ObsEventStream {
         let (socket, _) = ClientBuilder::from_uri(uri)
             .connect()
             .await
-            .map_err(|_| EventStreamError::Disconnected)?;
+            .map_err(|_| EventStreamError::Unavailable)?;
         let mut stream = Self { socket };
         let hello = stream.read_op(0).await?;
         let rpc_version = hello
@@ -122,11 +124,7 @@ impl ObsEventStream {
                 .ok_or(EventStreamError::Disconnected)?
                 .map_err(|_| EventStreamError::Disconnected)?;
             if let Some((code, _)) = message.as_close() {
-                return Err(if u16::from(code) == 4011 {
-                    EventStreamError::SessionInvalidated
-                } else {
-                    EventStreamError::Rejected
-                });
+                return Err(close_error(u16::from(code)));
             }
             if let Some(text) = message.as_text() {
                 let value: Value =
@@ -139,6 +137,16 @@ impl ObsEventStream {
                 return Ok((op, data));
             }
         }
+    }
+}
+
+/// Only OBS authentication and protocol close codes require configuration changes.
+fn close_error(code: u16) -> EventStreamError {
+    match code {
+        4009 => EventStreamError::Rejected,
+        4011 => EventStreamError::SessionInvalidated,
+        4000..=4008 | 4010 | 4012 => EventStreamError::Protocol,
+        _ => EventStreamError::Disconnected,
     }
 }
 
@@ -168,6 +176,22 @@ mod tests {
         fn clear(&self) -> Result<(), ObsCredentialError> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn ordinary_closes_reconnect_without_claiming_rejection() {
+        for code in [1000, 1001, 1006, 1011, 1012] {
+            let error = close_error(code);
+            assert!(matches!(error, EventStreamError::Disconnected));
+            assert!(!error.requires_configuration());
+        }
+        assert!(matches!(close_error(4009), EventStreamError::Rejected));
+        assert!(close_error(4009).requires_configuration());
+        assert!(matches!(
+            close_error(4011),
+            EventStreamError::SessionInvalidated
+        ));
+        assert!(!EventStreamError::Unavailable.requires_configuration());
     }
 
     #[test]

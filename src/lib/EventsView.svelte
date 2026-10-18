@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, type Snippet } from 'svelte';
 	import { DesktopRequestError } from './desktop';
 	import type {
 		EventPage,
@@ -14,12 +14,16 @@
 		load,
 		targets,
 		replay,
-		active = true
+		active = true,
+		actions,
+		showTitle = true
 	}: {
 		load: () => Promise<EventPage>;
 		targets: (request: EventIdentity) => Promise<EventTargetPage>;
 		replay: (request: ReplayEvent) => Promise<EventReplayResult>;
 		active?: boolean;
+		actions?: Snippet;
+		showTitle?: boolean;
 	} = $props();
 	let page = $state<EventPage | null>(null);
 	let error = $state('');
@@ -129,16 +133,19 @@
 <section aria-label="Events" aria-busy={loading}>
 	<header>
 		<div>
-			<h1>Events</h1>
+			{#if showTitle}<h1>Events</h1>{/if}
 			<p>Received events, excluding chat. Replay follows the current configuration.</p>
 		</div>
-		<button
-			disabled={loading}
-			onclick={() => {
-				error = '';
-				void refresh();
-			}}>Refresh</button
-		>
+		<div class="toolbar">
+			{#if actions}{@render actions()}{/if}
+			<button
+				disabled={loading}
+				onclick={() => {
+					error = '';
+					void refresh();
+				}}>Refresh</button
+			>
+		</div>
 	</header>
 	{#if error && !eventId}<p role="alert">{error}</p>{/if}
 	{#if message}<p role="status">{message}</p>{/if}
@@ -200,6 +207,13 @@
 </dialog>
 
 <style>
+	.toolbar {
+		flex: none;
+		display: flex;
+		gap: 8px;
+		align-items: center;
+		flex-wrap: wrap;
+	}
 	section {
 		width: 100%;
 	}
@@ -210,7 +224,7 @@
 		align-items: center;
 		gap: 12px;
 	}
-	header > div,
+	header > div:first-child,
 	article > div {
 		flex: 1;
 	}
